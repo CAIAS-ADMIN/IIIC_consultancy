@@ -1,0 +1,2 @@
+ALTER TABLE "documents" ADD COLUMN "progress_update_id" uuid;--> statement-breakpoint
+ALTER TABLE "documents" ADD CONSTRAINT "documents_progress_update_id_progress_updates_id_fk" FOREIGN KEY ("progress_update_id") REFERENCES "public"."progress_updates"("id") ON DELETE set null ON UPDATE no action;

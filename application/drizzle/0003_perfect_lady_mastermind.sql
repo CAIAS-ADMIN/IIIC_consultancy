@@ -1,0 +1,1 @@
+ALTER TABLE "consultancies" ADD COLUMN "flagged_fields" jsonb;

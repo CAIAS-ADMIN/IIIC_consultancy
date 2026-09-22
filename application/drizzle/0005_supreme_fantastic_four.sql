@@ -1,0 +1,1 @@
+ALTER TYPE "public"."consultancy_status" ADD VALUE 'closure_requested' BEFORE 'completed_closed';

@@ -1,0 +1,60 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: caias
+      POSTGRES_PASSWORD: caias
+      POSTGRES_DB: caias_consultancy
+    ports:
+      - "5433:5432"
+    volumes:
+      - caias_pgdata:/var/lib/postgresql/data
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    restart: unless-stopped
+    command: start-dev --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+
+  rustfs:
+    image: rustfs/rustfs:latest
+    restart: unless-stopped
+    depends_on:
+      - rustfs-volume-permissions
+    # Single node, single disk — fine for local dev; not a production topology.
+    environment:
+      RUSTFS_VOLUMES: /data/rustfs0
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_ACCESS_KEY: caiasdev
+      RUSTFS_SECRET_KEY: caiasdevsecret
+      RUSTFS_UNSAFE_BYPASS_DISK_CHECK: "true"
+      # Image defaults to /logs, a container-local dir the non-root rustfs
+      # user can't create at "/" — empty means log to stdout instead.
+      RUSTFS_OBS_LOG_DIRECTORY: ""
+    ports:
+      - "9000:9000" # S3 API — matches RUSTFS_ENDPOINT in .env
+      - "9001:9001" # Web console
+    volumes:
+      - caias_rustfs_data:/data/rustfs0
+
+  # The rustfs image runs as uid/gid 10001:10001; a fresh named volume is
+  # root-owned, so fix permissions once before rustfs starts.
+  rustfs-volume-permissions:
+    image: alpine
+    command: sh -c "chown -R 10001:10001 /data/rustfs0"
+    volumes:
+      - caias_rustfs_data:/data/rustfs0
+    restart: "no"
+
+volumes:
+  caias_pgdata:
+  caias_rustfs_data:

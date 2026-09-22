@@ -1,0 +1,107 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens (Phase 0 of the frontend build plan). Sampled from the IIIC
+ * logo and the three reference screenshots (Faculty Dashboard, New
+ * Consultancy wizard, Admin Overview): a warm cream background, white cards,
+ * a green primary (matches the logo's circle-blob green) and an orange
+ * accent (matches the "IIIC" wordmark). Every color/spacing/radius value
+ * used anywhere in the app should come from one of these tokens — never a
+ * hardcoded hex or px value in component code.
+ */
+:root {
+  /* Surfaces */
+  --background: #f7f6f1;
+  --card: #ffffff;
+  --border: #e5e2d8;
+  --input-border: #d8d4c6;
+  --ring: #4caf50;
+
+  /* Text */
+  --foreground: #1a1f1a;
+  --muted-foreground: #6b7075;
+
+  /* Brand */
+  --primary: #3e8e41;
+  --primary-hover: #357638;
+  --primary-foreground: #ffffff;
+  --primary-soft: #e8f5e9;
+  --primary-soft-foreground: #256029;
+
+  --accent: #f2801f;
+  --accent-foreground: #ffffff;
+  --accent-soft: #fdecd8;
+  --accent-soft-foreground: #a15106;
+
+  /* Status palette (shared by StatusBadge across every backend enum) */
+  --status-success-bg: #e8f5e9;
+  --status-success-fg: #256029;
+  --status-warning-bg: #fdecd8;
+  --status-warning-fg: #a15106;
+  --status-danger-bg: #fdecec;
+  --status-danger-fg: #b42318;
+  --status-info-bg: #e8f0fe;
+  --status-info-fg: #1d4ed8;
+  --status-special-bg: #f1e9fb;
+  --status-special-fg: #7c3aed;
+  --status-neutral-bg: #f1f0ec;
+  --status-neutral-fg: #57534e;
+
+  /* Shape */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.625rem;
+  --radius-lg: 1rem;
+  --radius-pill: 999px;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-border: var(--border);
+  --color-input-border: var(--input-border);
+  --color-ring: var(--ring);
+  --color-muted-foreground: var(--muted-foreground);
+
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-soft: var(--primary-soft);
+  --color-primary-soft-foreground: var(--primary-soft-foreground);
+
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-soft-foreground: var(--accent-soft-foreground);
+
+  --color-status-success-bg: var(--status-success-bg);
+  --color-status-success-fg: var(--status-success-fg);
+  --color-status-warning-bg: var(--status-warning-bg);
+  --color-status-warning-fg: var(--status-warning-fg);
+  --color-status-danger-bg: var(--status-danger-bg);
+  --color-status-danger-fg: var(--status-danger-fg);
+  --color-status-info-bg: var(--status-info-bg);
+  --color-status-info-fg: var(--status-info-fg);
+  --color-status-special-bg: var(--status-special-bg);
+  --color-status-special-fg: var(--status-special-fg);
+  --color-status-neutral-bg: var(--status-neutral-bg);
+  --color-status-neutral-fg: var(--status-neutral-fg);
+
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-pill: var(--radius-pill);
+
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+/* This app is designed as a light, cream-and-white product surface — the
+   reference screens have no dark variant, so we deliberately don't ship a
+   prefers-color-scheme override yet. Revisit if a real dark mode is asked for. */
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+}
