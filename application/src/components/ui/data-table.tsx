@@ -64,7 +64,7 @@ export function DataTable<T>({
       {/* Mobile stacked card list */}
       <ul className="flex flex-col gap-3 md:hidden">
         {data.map((row) => (
-          <li key={keyFor(row)} className="rounded-lg border border-border bg-card p-4">
+          <li key={keyFor(row)} className="rounded-lg border border-border bg-card p-4 [&_a]:inline-flex [&_a]:min-h-11 [&_a]:items-center">
             <div className="text-sm font-semibold text-foreground">{primaryColumn.cell(row)}</div>
             <dl className="mt-2 flex flex-col gap-1.5">
               {secondaryColumns.map((col) => (

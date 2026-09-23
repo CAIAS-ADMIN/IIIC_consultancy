@@ -213,6 +213,49 @@ test("Agreement Date cannot be later than the submission date", async () => {
   assert.equal(res.status, 400);
 });
 
+test("PATCH on a draft persists team members, deliverables, and involved departments (not just plain consultancy/client/agreement fields)", async () => {
+  const otherDept = await upsertTestDepartment({ code: "TESTDEPT2", name: "Test Department 2" });
+  const draft = await createDraft();
+
+  const patchRes = await fetch(`${BASE_URL}/api/consultancies/${draft.id}`, {
+    method: "PATCH",
+    headers: { cookie: facultyCookie, "content-type": "application/json" },
+    body: JSON.stringify({
+      teamMembers: [
+        { name: "Registration Test Faculty", role: "Principal Investigator" },
+        { name: "Co-Investigator", role: "Co-Investigator", isExternal: true },
+      ],
+      deliverables: [{ description: "Interim report" }, { description: "Final report", dueDate: "2026-06-01" }],
+      departmentsInvolved: [departmentId, otherDept.id],
+    }),
+  });
+  assert.equal(patchRes.status, 200);
+
+  const getRes = await fetch(`${BASE_URL}/api/consultancies/${draft.id}`, { headers: { cookie: facultyCookie } });
+  const body = await getRes.json();
+  assert.equal(body.data.teamMembers.length, 2);
+  assert.ok(body.data.teamMembers.some((m: { name: string }) => m.name === "Co-Investigator"));
+  assert.equal(body.data.deliverables.length, 2);
+  assert.deepEqual(body.data.departmentsInvolved.sort(), [departmentId, otherDept.id].sort());
+
+  // A second save (delete-then-reinsert) replaces rather than accumulates.
+  const secondPatchRes = await fetch(`${BASE_URL}/api/consultancies/${draft.id}`, {
+    method: "PATCH",
+    headers: { cookie: facultyCookie, "content-type": "application/json" },
+    body: JSON.stringify({
+      teamMembers: [{ name: "Registration Test Faculty", role: "Principal Investigator" }],
+      deliverables: [{ description: "Final report" }],
+      departmentsInvolved: [departmentId],
+    }),
+  });
+  assert.equal(secondPatchRes.status, 200);
+  const getRes2 = await fetch(`${BASE_URL}/api/consultancies/${draft.id}`, { headers: { cookie: facultyCookie } });
+  const body2 = await getRes2.json();
+  assert.equal(body2.data.teamMembers.length, 1);
+  assert.equal(body2.data.deliverables.length, 1);
+  assert.deepEqual(body2.data.departmentsInvolved, [departmentId]);
+});
+
 test("Expected Completion Date cannot precede Start Date", async () => {
   const draft = await createDraft();
   const payload = validSubmitPayload({

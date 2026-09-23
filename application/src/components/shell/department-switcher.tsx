@@ -1,54 +1,48 @@
 "use client";
 
 import * as React from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-type Department = { id: string; name: string; code: string };
+export type DepartmentOption = { id: string; name: string };
 
 const ALL_DEPARTMENTS = "all";
 
 /**
- * Cosmetic shell chrome for oversight roles — cross-department/year filtering
- * is wired up in a later phase. Local component state only; selecting a
- * department here doesn't filter anything yet.
+ * Oversight-role department filter, driven by the `?department=` URL param
+ * so the server-rendered page it sits on actually filters by it (and the
+ * view is shareable/bookmarkable). Changing it drops `page` — page 3 of the
+ * old department's results rarely exists in the new one.
  */
-export function DepartmentSwitcher() {
-  const [departments, setDepartments] = React.useState<Department[]>([]);
-  const [value, setValue] = React.useState(ALL_DEPARTMENTS);
+export function DepartmentSwitcher({ departments }: { departments: DepartmentOption[] }) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const [isPending, startTransition] = React.useTransition();
+  const value = searchParams.get("department") ?? ALL_DEPARTMENTS;
 
-  React.useEffect(() => {
-    let cancelled = false;
-    fetch("/api/departments")
-      .then((res) => (res.ok ? res.json() : { data: [] }))
-      .then((body: { data?: Department[] }) => {
-        if (!cancelled) setDepartments(body.data ?? []);
-      })
-      .catch(() => {
-        if (!cancelled) setDepartments([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const onChange = (next: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (next === ALL_DEPARTMENTS) params.delete("department");
+    else params.set("department", next);
+    params.delete("page");
+    const query = params.toString();
+    startTransition(() => router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false }));
+  };
 
   return (
-    <div className="flex items-center gap-3">
-      <Select value={value} onValueChange={setValue}>
-        <SelectTrigger className="h-9 w-auto min-w-[9rem] text-sm" aria-label="Department filter">
-          <SelectValue placeholder="All Departments" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={ALL_DEPARTMENTS}>All Departments</SelectItem>
-          {departments.map((dept) => (
-            <SelectItem key={dept.id} value={dept.id}>
-              {dept.name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <span className="hidden whitespace-nowrap text-sm text-muted-foreground sm:inline">
-        Academic Year 2026–27
-      </span>
-    </div>
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger className="h-11 w-full min-w-[11rem] sm:w-auto md:h-9" aria-label="Filter by department" aria-busy={isPending}>
+        <SelectValue placeholder="All Departments" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value={ALL_DEPARTMENTS}>All Departments</SelectItem>
+        {departments.map((dept) => (
+          <SelectItem key={dept.id} value={dept.id}>
+            {dept.name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }

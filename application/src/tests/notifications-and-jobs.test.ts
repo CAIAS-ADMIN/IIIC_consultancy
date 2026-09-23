@@ -344,3 +344,30 @@ test("reject and return-for-clarification each produce a notification to the rec
   });
   assert.ok(returnNotifications.some((n) => n.userId === facultyId));
 });
+
+test("GET/PATCH /api/notifications: a user sees only their own rows, unreadCount is accurate, and marking read is scoped to the owner", async () => {
+  const [row] = await db
+    .insert(notifications)
+    .values({ userId: facultyId, type: "test_notification", message: "Phase 10 UI test notification" })
+    .returning();
+
+  const listRes = await fetch(`${BASE_URL}/api/notifications`, { headers: { cookie: facultyCookie } });
+  assert.equal(listRes.status, 200);
+  const listBody = await listRes.json();
+  assert.ok(listBody.data.some((n: { id: string }) => n.id === row.id));
+  assert.ok(listBody.unreadCount >= 1);
+
+  // another user cannot mark someone else's notification read
+  const otherPatch = await fetch(`${BASE_URL}/api/notifications/${row.id}`, { method: "PATCH", headers: { cookie: hodCookie } });
+  assert.equal(otherPatch.status, 404);
+
+  const ownPatch = await fetch(`${BASE_URL}/api/notifications/${row.id}`, { method: "PATCH", headers: { cookie: facultyCookie } });
+  assert.equal(ownPatch.status, 200);
+  const updated = (await ownPatch.json()).data;
+  assert.equal(updated.isRead, true);
+
+  const listAfter = await fetch(`${BASE_URL}/api/notifications`, { headers: { cookie: facultyCookie } });
+  const listAfterBody = await listAfter.json();
+  const readRow = listAfterBody.data.find((n: { id: string }) => n.id === row.id);
+  assert.equal(readRow.isRead, true);
+});

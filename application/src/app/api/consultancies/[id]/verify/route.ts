@@ -12,6 +12,7 @@ import { buildConsultancySnapshot } from "@/lib/consultancy/snapshot";
 import { verifyStageSchema } from "@/lib/validation/verify";
 import { recordAuditEvent } from "@/lib/audit";
 import { notifyRole, notifyUser } from "@/lib/notifications";
+import { FLAGGABLE_FIELD_NAMES } from "@/lib/consultancy/flaggable-fields";
 
 const VERIFIABLE_STATUSES = ["submitted", "under_verification"] as const;
 
@@ -44,6 +45,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
   const input = parsed.data;
+
+  if (input.decision === "return") {
+    const invalidFields = (input.flaggedFields ?? []).filter((f) => !FLAGGABLE_FIELD_NAMES.has(f));
+    if (invalidFields.length > 0) {
+      return Response.json(
+        { error: `Not real consultancy fields, cannot be flagged: ${invalidFields.join(", ")}` },
+        { status: 400 }
+      );
+    }
+  }
 
   const chain = await resolveApprovalChain(db, {
     departmentId: existing.departmentId,

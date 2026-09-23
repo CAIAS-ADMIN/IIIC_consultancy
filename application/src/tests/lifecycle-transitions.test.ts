@@ -23,8 +23,9 @@ before(async () => {
     name: "Phase 8 Test Faculty",
     email: "test.faculty.phase8@caias.in",
     roles: ["faculty"],
+    departmentId,
   });
-  facultyCookie = await createTestSessionCookie({ userId: faculty.id, roles: ["faculty"] });
+  facultyCookie = await createTestSessionCookie({ userId: faculty.id, roles: ["faculty"], departmentId });
 
   const hod = await upsertTestUser({
     keycloakSub: "test-hod-phase8",

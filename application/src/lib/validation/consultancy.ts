@@ -1,8 +1,8 @@
 import { z } from "zod";
 
-const yesNo = z.boolean();
-const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Expected YYYY-MM-DD");
-const money = z.union([z.number(), z.string()]).transform((v) => String(v));
+export const yesNo = z.boolean();
+export const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Expected YYYY-MM-DD");
+export const money = z.union([z.number(), z.string()]).transform((v) => String(v));
 
 /** Section 2/3 — Registration / Basic Details + Consultancy Area. Draft-level: only what's needed to create the row. */
 export const draftConsultancySchema = z.object({
@@ -18,7 +18,7 @@ export const draftConsultancySchema = z.object({
 });
 
 /** Section 4 — Client / External Organization */
-const clientSchema = z
+export const clientSchema = z
   .object({
     organizationName: z.string().min(1),
     organizationTypeCode: z.string().min(1),
@@ -45,7 +45,7 @@ const clientSchema = z
   });
 
 /** Section 5 — MoU / Agreement Details */
-const agreementSchema = z
+export const agreementSchema = z
   .object({
     agreementTypeCode: z.string().min(1),
     agreementTypeOther: z.string().optional(),
@@ -73,7 +73,7 @@ const agreementSchema = z
   });
 
 /** Section 6 — Consultancy Team */
-const teamMemberSchema = z.object({
+export const teamMemberSchema = z.object({
   userId: z.string().uuid().optional(),
   name: z.string().min(1),
   role: z.string().min(1),
@@ -81,7 +81,7 @@ const teamMemberSchema = z.object({
   isExternal: z.boolean().optional().default(false),
 });
 
-const teamSchema = z
+export const teamSchema = z
   .object({
     members: z.array(teamMemberSchema).min(1, "At least one team member is required"),
     departmentsInvolved: z.array(z.string().uuid()).optional().default([]),
@@ -100,7 +100,7 @@ const teamSchema = z
   });
 
 /** Section 7 — Financial Details */
-const financialSchema = z
+export const financialSchema = z
   .object({
     totalValue: money,
     currencyCode: z.string().min(1).default("INR"),
@@ -116,12 +116,12 @@ const financialSchema = z
   });
 
 /** Section 8 — Scope of Work & Deliverables */
-const deliverableSchema = z.object({
+export const deliverableSchema = z.object({
   description: z.string().min(1),
   dueDate: dateString.optional(),
 });
 
-const scopeSchema = z.object({
+export const scopeSchema = z.object({
   scopeOfWork: z.string().min(1),
   expectedOutcomes: z.string().optional(),
   clientAcceptanceRequired: yesNo.default(false),
@@ -129,7 +129,7 @@ const scopeSchema = z.object({
 });
 
 /** Section 5 conditional flags (NDA / IP) + Section 10 — CAIAS Resources */
-const resourcesSchema = z
+export const resourcesSchema = z
   .object({
     ndaRequired: yesNo.default(false),
     ipAgreementRequired: yesNo.default(false),

@@ -15,20 +15,25 @@
   --card: #ffffff;
   --border: #e5e2d8;
   --input-border: #d8d4c6;
-  --ring: #4caf50;
+  --ring: #2e7d32;
 
   /* Text */
   --foreground: #1a1f1a;
   --muted-foreground: #6b7075;
 
-  /* Brand */
-  --primary: #3e8e41;
-  --primary-hover: #357638;
+  /* Brand — the logo's green (#3e8e41) is 4.08:1 on white, under WCAG AA's
+     4.5:1 for text and white-on-green buttons, so the UI uses one shade
+     darker. It still passes on the cream background (4.74) and on
+     primary-soft (4.56), so it's safe everywhere the token is used. */
+  --primary: #2e7d32;
+  --primary-hover: #276b2b;
   --primary-foreground: #ffffff;
   --primary-soft: #e8f5e9;
   --primary-soft-foreground: #256029;
 
+  /* The logo orange is 2.66:1 on white — fills/bars only, never text. */
   --accent: #f2801f;
+  --accent-strong: #b85c00;
   --accent-foreground: #ffffff;
   --accent-soft: #fdecd8;
   --accent-soft-foreground: #a15106;
@@ -70,6 +75,7 @@
   --color-primary-soft-foreground: var(--primary-soft-foreground);
 
   --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent-soft: var(--accent-soft);
   --color-accent-soft-foreground: var(--accent-soft-foreground);

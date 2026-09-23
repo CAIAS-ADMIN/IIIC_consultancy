@@ -223,6 +223,31 @@ test("a value-range-bounded stage is skipped when the consultancy's value falls 
   assert.equal(final.workflowStage, "verification_complete");
 });
 
+test("return for clarification rejects a flaggedFields value that isn't a real top-level consultancy field", async () => {
+  const department = await upsertTestDepartment({ code: "VWF-BADFLAG", name: "Bad Flag Test Dept" });
+  await upsertTestApprovalStageConfig({
+    id: randomUUID(),
+    departmentId: department.id,
+    stage: "hod_verification_pending",
+    sequence: 1,
+    approverRole: "hod",
+  });
+
+  const submitted = await createAndSubmit(department.id);
+  const res = await verify(submitted.id, hodCookie, {
+    decision: "return",
+    comments: "typo'd field name",
+    flaggedFields: ["consultancyTitle"], // not a real column (the real one is "title")
+  });
+  assert.equal(res.status, 400);
+  const body = await res.json();
+  assert.match(String(body.error), /consultancyTitle/);
+
+  // the consultancy is untouched — still awaiting verification, not clarification_required
+  const stillPending = await db.query.consultancies.findFirst({ where: eq(consultancies.id, submitted.id) });
+  assert.equal(stillPending?.status, "submitted");
+});
+
 test("return for clarification restricts editing to flagged fields, snapshots the prior version, and resubmission re-enters at the returning stage", async () => {
   const department = await upsertTestDepartment({ code: "VWF-CLARIFY", name: "Clarify Test Dept" });
   await upsertTestApprovalStageConfig({

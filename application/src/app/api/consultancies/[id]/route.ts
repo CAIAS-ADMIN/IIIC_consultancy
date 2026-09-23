@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { requireSession } from "@/lib/auth/requireRole";
 import { authErrorResponse } from "@/lib/auth/errors";
 import { db } from "@/db";
-import { consultancies, clients, agreements } from "@/db/schema";
+import { consultancies, clients, agreements, consultancyTeamMembers, deliverables, consultancyDepartments } from "@/db/schema";
 import { getConsultancyById, getClientByConsultancyId, getAgreementByConsultancyId } from "@/db/queries/consultancies";
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -19,12 +19,24 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     return Response.json({ error: "Not found" }, { status: 404 });
   }
 
-  const [client, agreement] = await Promise.all([
+  const [client, agreement, teamMembers, deliverableRows, departmentsInvolvedRows] = await Promise.all([
     getClientByConsultancyId(id),
     getAgreementByConsultancyId(id),
+    db.query.consultancyTeamMembers.findMany({ where: eq(consultancyTeamMembers.consultancyId, id) }),
+    db.query.deliverables.findMany({ where: eq(deliverables.consultancyId, id) }),
+    db.query.consultancyDepartments.findMany({ where: eq(consultancyDepartments.consultancyId, id) }),
   ]);
 
-  return Response.json({ data: { consultancy, client, agreement } });
+  return Response.json({
+    data: {
+      consultancy,
+      client,
+      agreement,
+      teamMembers,
+      deliverables: deliverableRows,
+      departmentsInvolved: departmentsInvolvedRows.map((r) => r.departmentId),
+    },
+  });
 }
 
 /**
@@ -89,7 +101,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   }
 
   const body = await request.json();
-  const { client, agreement, ...consultancyFields } = body ?? {};
+  const { client, agreement, teamMembers, deliverables: deliverableInputs, departmentsInvolved, ...consultancyFields } =
+    body ?? {};
 
   if (Object.keys(consultancyFields).length > 0) {
     await db
@@ -113,6 +126,37 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       await db.update(agreements).set(agreement).where(eq(agreements.id, existingAgreement.id));
     } else {
       await db.insert(agreements).values({ ...agreement, consultancyId: id });
+    }
+  }
+
+  // Team members / deliverables / departments-involved are child-table rows
+  // with no home on the `consultancies` row itself — persisted here the same
+  // delete-then-reinsert way `submit` does, so a wizard "Save Draft" past
+  // Step 2 doesn't silently lose progress on these sections. Deliberately
+  // lenient (no zod schema enforced) — a draft save should tolerate a
+  // still-incomplete row (e.g. a team member row with no role picked yet)
+  // the way `client`/`agreement`/plain consultancy fields already do above;
+  // the real shape enforcement is `submitConsultancySchema` at submit time.
+  if (Array.isArray(teamMembers)) {
+    await db.delete(consultancyTeamMembers).where(eq(consultancyTeamMembers.consultancyId, id));
+    if (teamMembers.length > 0) {
+      await db.insert(consultancyTeamMembers).values(teamMembers.map((m) => ({ ...m, consultancyId: id })));
+    }
+  }
+
+  if (Array.isArray(deliverableInputs)) {
+    await db.delete(deliverables).where(eq(deliverables.consultancyId, id));
+    if (deliverableInputs.length > 0) {
+      await db.insert(deliverables).values(deliverableInputs.map((d) => ({ ...d, consultancyId: id })));
+    }
+  }
+
+  if (Array.isArray(departmentsInvolved)) {
+    await db.delete(consultancyDepartments).where(eq(consultancyDepartments.consultancyId, id));
+    if (departmentsInvolved.length > 0) {
+      await db
+        .insert(consultancyDepartments)
+        .values(departmentsInvolved.map((departmentId: string) => ({ consultancyId: id, departmentId })));
     }
   }
 

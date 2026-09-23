@@ -168,6 +168,42 @@ test("a faculty-scoped call to any payment-write action is rejected", async () =
   assert.equal(hodTx.status, 403);
 });
 
+test("payment schedule rows can be edited by finance, but not by faculty or hod", async () => {
+  const consultancy = await createActiveConsultancy();
+
+  const createRes = await fetch(`${BASE_URL}/api/consultancies/${consultancy.id}/payment-schedules`, {
+    method: "POST",
+    headers: { cookie: financeCookie, "content-type": "application/json" },
+    body: JSON.stringify({ stageLabel: "Advance", plannedAmount: "30000", plannedDate: "2026-02-01" }),
+  });
+  assert.equal(createRes.status, 201);
+  const schedule = (await createRes.json()).data;
+
+  const facultyEditRes = await fetch(`${BASE_URL}/api/consultancies/${consultancy.id}/payment-schedules/${schedule.id}`, {
+    method: "PATCH",
+    headers: { cookie: facultyCookie, "content-type": "application/json" },
+    body: JSON.stringify({ plannedAmount: "35000" }),
+  });
+  assert.equal(facultyEditRes.status, 403);
+
+  const hodEditRes = await fetch(`${BASE_URL}/api/consultancies/${consultancy.id}/payment-schedules/${schedule.id}`, {
+    method: "PATCH",
+    headers: { cookie: hodCookie, "content-type": "application/json" },
+    body: JSON.stringify({ plannedAmount: "35000" }),
+  });
+  assert.equal(hodEditRes.status, 403);
+
+  const financeEditRes = await fetch(`${BASE_URL}/api/consultancies/${consultancy.id}/payment-schedules/${schedule.id}`, {
+    method: "PATCH",
+    headers: { cookie: financeCookie, "content-type": "application/json" },
+    body: JSON.stringify({ plannedAmount: "35000", stageLabel: "Advance (revised)" }),
+  });
+  assert.equal(financeEditRes.status, 200);
+  const updated = (await financeEditRes.json()).data;
+  assert.equal(updated.plannedAmount, "35000.00");
+  assert.equal(updated.stageLabel, "Advance (revised)");
+});
+
 test("overpayment beyond agreement value is rejected with a clear error, and succeeds once an adjustment covers it", async () => {
   const consultancy = await createActiveConsultancy(); // agreement value 100000
 

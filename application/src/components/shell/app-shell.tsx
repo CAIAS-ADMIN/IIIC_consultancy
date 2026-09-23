@@ -4,14 +4,14 @@ import * as React from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { signOut } from "next-auth/react";
-import { Bell, LogOut, Menu } from "lucide-react";
+import { LogOut, Menu } from "lucide-react";
+import { NotificationBell } from "./notification-bell";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import type { Role } from "@/db/schema/enums";
-import { getNavItems, isOversightRole, MOBILE_PRIMARY_COUNT, type NavItem } from "./nav-config";
+import { getNavItems, MOBILE_PRIMARY_COUNT, type NavItem } from "./nav-config";
 import { useActiveHref } from "./use-active-href";
-import { DepartmentSwitcher } from "./department-switcher";
 
 export type ShellUser = {
   name: string | null;
@@ -69,7 +69,6 @@ function SignOutButton({ className }: { className?: string }) {
 export function AppShell({ user, children }: { user: ShellUser; children: React.ReactNode }) {
   const items = getNavItems(user.roles);
   const activeHref = useActiveHref(items);
-  const oversight = isOversightRole(user.roles);
   const primaryRole = user.roles[0];
 
   const primaryItems = items.slice(0, MOBILE_PRIMARY_COUNT);
@@ -79,7 +78,7 @@ export function AppShell({ user, children }: { user: ShellUser; children: React.
   return (
     <div className="flex h-dvh flex-col md:flex-row">
       {/* Desktop sidebar */}
-      <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-card md:flex">
+      <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-card md:flex print:hidden">
         <div className="flex items-center gap-2 px-5 py-5">
           <Image src="/brand/iiic-logo.webp" alt="IIIC" width={32} height={32} unoptimized />
           <span className="text-sm font-bold text-foreground">IIIC Consultancy</span>
@@ -98,21 +97,13 @@ export function AppShell({ user, children }: { user: ShellUser; children: React.
 
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Top bar */}
-        <header className="flex items-center justify-between gap-3 border-b border-border bg-card px-4 py-3 md:justify-end md:px-6">
+        <header className="flex items-center justify-between gap-3 border-b border-border bg-card px-4 py-3 md:justify-end md:px-6 print:hidden">
           <div className="flex items-center gap-2 md:hidden">
             <Image src="/brand/iiic-logo.webp" alt="IIIC" width={24} height={24} unoptimized />
             <span className="text-sm font-bold text-foreground">IIIC Consultancy</span>
           </div>
           <div className="flex items-center gap-3">
-            {oversight && <DepartmentSwitcher />}
-            <button
-              type="button"
-              title="Notifications (coming soon)"
-              className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-background"
-            >
-              <Bell className="h-5 w-5" aria-hidden />
-              <span className="sr-only">Notifications</span>
-            </button>
+            <NotificationBell />
           </div>
         </header>
 
@@ -121,7 +112,7 @@ export function AppShell({ user, children }: { user: ShellUser; children: React.
 
       {/* Mobile bottom tab bar */}
       <nav
-        className="fixed inset-x-0 bottom-0 z-40 grid border-t border-border bg-card md:hidden"
+        className="fixed inset-x-0 bottom-0 z-40 grid border-t border-border bg-card md:hidden print:hidden"
         style={{ gridTemplateColumns: `repeat(${mobileColumns}, minmax(0, 1fr))` }}
       >
         {primaryItems.map((item) => {
@@ -131,13 +122,15 @@ export function AppShell({ user, children }: { user: ShellUser; children: React.
             <Link
               key={item.href}
               href={item.href}
+              aria-label={item.label}
+              aria-current={active ? "page" : undefined}
               className={cn(
-                "flex flex-col items-center gap-1 px-1 py-2 text-[11px] font-medium",
+                "flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 px-1 py-2 text-[11px] font-medium",
                 active ? "text-primary" : "text-muted-foreground"
               )}
             >
               <Icon className="h-5 w-5" aria-hidden />
-              <span className="truncate">{item.label}</span>
+              <span className="w-full truncate text-center">{item.shortLabel ?? item.label}</span>
             </Link>
           );
         })}
@@ -146,7 +139,7 @@ export function AppShell({ user, children }: { user: ShellUser; children: React.
           <SheetTrigger asChild>
             <button
               type="button"
-              className="flex flex-col items-center gap-1 px-1 py-2 text-[11px] font-medium text-muted-foreground"
+              className="flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 px-1 py-2 text-[11px] font-medium text-muted-foreground"
             >
               <Menu className="h-5 w-5" aria-hidden />
               More
@@ -161,7 +154,7 @@ export function AppShell({ user, children }: { user: ShellUser; children: React.
                   <Link
                     key={item.href}
                     href={item.href}
-                    className="flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-foreground hover:bg-background"
+                    className="flex min-h-11 items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-foreground hover:bg-background"
                   >
                     <Icon className="h-4 w-4" aria-hidden />
                     {item.label}

@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { eq, desc } from "drizzle-orm";
+import { and, eq, desc } from "drizzle-orm";
 import { requireRole, requireSession } from "@/lib/auth/requireRole";
 import { authErrorResponse } from "@/lib/auth/errors";
 import { db } from "@/db";
@@ -7,16 +7,23 @@ import { consultancies } from "@/db/schema";
 import { consultancyStatusEnum, type ConsultancyStatus } from "@/db/schema/enums";
 import { draftConsultancySchema } from "@/lib/validation/consultancy";
 import { recordAuditEvent } from "@/lib/audit";
+import { resolveDepartmentScope } from "@/lib/consultancy/scope";
 
 /**
  * Lists consultancies, optionally filtered by `status` — e.g.
  * `?status=active` for an "active" count/roster that correctly excludes
  * `cancelled`/`terminated`/`completed_closed` records (Phase 8) without
  * deleting them; they stay reachable individually via `GET /:id`.
+ *
+ * Department-scoped the same way `search`/`reports`/`export` (Phase 12) are —
+ * a `faculty`-only caller is narrowed to their own department rather than
+ * seeing every consultancy in the institution; any oversight role is
+ * unrestricted. This route predates Phase 12 and had been left unscoped.
  */
 export async function GET(request: NextRequest) {
+  let user;
   try {
-    await requireSession();
+    user = await requireSession();
   } catch (error) {
     return authErrorResponse(error);
   }
@@ -26,10 +33,20 @@ export async function GET(request: NextRequest) {
     return Response.json({ error: `Invalid status '${statusParam}'` }, { status: 400 });
   }
 
+  const scope = resolveDepartmentScope(user);
+  if (scope === null) {
+    return Response.json({ data: [], count: 0 });
+  }
+
+  const conditions = [
+    statusParam ? eq(consultancies.status, statusParam as ConsultancyStatus) : undefined,
+    scope ? eq(consultancies.departmentId, scope) : undefined,
+  ].filter((c) => c !== undefined);
+
   const rows = await db
     .select()
     .from(consultancies)
-    .where(statusParam ? eq(consultancies.status, statusParam as ConsultancyStatus) : undefined)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(consultancies.createdAt));
 
   return Response.json({ data: rows, count: rows.length });

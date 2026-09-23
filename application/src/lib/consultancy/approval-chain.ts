@@ -39,14 +39,41 @@ export async function resolveApprovalChain(
     )
     .orderBy(asc(approvalStageConfigs.sequence));
 
-  const inRange = rows.filter((row) => {
-    const min = row.minValue == null ? -Infinity : Number(row.minValue);
-    const max = row.maxValue == null ? Infinity : Number(row.maxValue);
-    return value >= min && value <= max;
-  });
+  return selectApprovalChain(rows, input);
+}
+
+type ApprovalStageConfigRow = typeof approvalStageConfigs.$inferSelect;
+
+/**
+ * The matching/dedup half of `resolveApprovalChain`, over config rows already
+ * in memory — for callers resolving many consultancies at once (the
+ * verification queue), which load the config table once instead of issuing
+ * one query per consultancy. Applies every rule itself (required,
+ * department/area wildcard-or-match, value range, lowest sequence per
+ * stage), so it's safe to pass it the whole unfiltered table.
+ */
+export function selectApprovalChain(
+  configs: ApprovalStageConfigRow[],
+  input: { departmentId: string; consultancyAreaCode: string; totalValue: string | number | null }
+): ApprovalChainStage[] {
+  const value = input.totalValue == null ? 0 : Number(input.totalValue);
+
+  const matching = configs
+    .filter(
+      (row) =>
+        row.isRequired &&
+        (row.departmentId == null || row.departmentId === input.departmentId) &&
+        (row.consultancyAreaCode == null || row.consultancyAreaCode === input.consultancyAreaCode)
+    )
+    .filter((row) => {
+      const min = row.minValue == null ? -Infinity : Number(row.minValue);
+      const max = row.maxValue == null ? Infinity : Number(row.maxValue);
+      return value >= min && value <= max;
+    })
+    .sort((a, b) => a.sequence - b.sequence);
 
   const byStage = new Map<string, ApprovalChainStage>();
-  for (const row of inRange) {
+  for (const row of matching) {
     if (!byStage.has(row.stage)) {
       byStage.set(row.stage, { stage: row.stage, approverRole: row.approverRole, sequence: row.sequence });
     }

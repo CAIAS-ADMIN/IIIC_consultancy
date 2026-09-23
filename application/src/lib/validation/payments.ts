@@ -9,6 +9,12 @@ export const createPaymentScheduleSchema = z.object({
   plannedDate: dateString.optional(),
 });
 
+export const updatePaymentScheduleSchema = z.object({
+  stageLabel: z.string().min(1).max(255).optional(),
+  plannedAmount: money.optional(),
+  plannedDate: dateString.optional(),
+});
+
 export const recordPaymentTransactionSchema = z.object({
   amount: money,
   transactionDate: dateString,

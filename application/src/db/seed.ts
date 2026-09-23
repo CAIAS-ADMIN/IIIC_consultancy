@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { eq, sql } from "drizzle-orm";
 import { db } from "./index";
 import * as schema from "./schema";
 
@@ -43,10 +44,19 @@ const ID = {
 async function seed() {
   console.log("Upserting one row per table...");
 
+  // isActive: false — this is smoke-test furniture (Phase 1's "one row per
+  // table" chain, id fixed at 00000000-0000-0000-0000-000000000001), not a
+  // real selectable department. Discovered live while building the Phase 3
+  // wizard: its all-zeros id fails `z.string().uuid()`'s RFC4122 version-nibble
+  // check, so any real registration that picked it from a department dropdown
+  // would fail submission with a cryptic "Invalid UUID" error. Deactivating
+  // (not deleting — audit_events' ON DELETE RESTRICT makes this row
+  // permanent anyway) keeps it out of every real `isActive: true` department
+  // picker while leaving the seeded FK chain under it intact.
   const [department] = await db
     .insert(schema.departments)
-    .values({ id: ID.department, name: "Computer Science & Engineering", code: "CSE" })
-    .onConflictDoUpdate({ target: schema.departments.id, set: { name: "Computer Science & Engineering" } })
+    .values({ id: ID.department, name: "Computer Science & Engineering", code: "CSE", isActive: false })
+    .onConflictDoUpdate({ target: schema.departments.id, set: { name: "Computer Science & Engineering", isActive: false } })
     .returning();
 
   const [faculty] = await db
@@ -111,12 +121,22 @@ async function seed() {
     })
     .returning();
 
+  // Never move the counter backwards: this dev DB keeps real consultancy rows
+  // across re-seeds, so resetting to 1 would make the next submit collide with
+  // an existing Consultancy ID (unique violation -> 500 on every submit).
+  const [{ maxInUse }] = await db
+    .select({
+      maxInUse: sql<number>`coalesce(max(cast(substring(${schema.consultancies.consultancyCode} from '(\\d+)$') as integer)), 0)`,
+    })
+    .from(schema.consultancies)
+    .where(eq(schema.consultancies.academicYearCode, "2025-26"));
+  const floor = Math.max(1, Number(maxInUse));
   const [idSequence] = await db
     .insert(schema.consultancyIdSequences)
-    .values({ academicYearCode: "2025-26", lastSequence: 1 })
+    .values({ academicYearCode: "2025-26", lastSequence: floor })
     .onConflictDoUpdate({
       target: schema.consultancyIdSequences.academicYearCode,
-      set: { lastSequence: 1 },
+      set: { lastSequence: sql`greatest(${schema.consultancyIdSequences.lastSequence}, ${floor})` },
     })
     .returning();
 

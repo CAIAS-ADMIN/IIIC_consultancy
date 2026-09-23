@@ -31,7 +31,7 @@ export function YesNoToggle({
             disabled={disabled}
             onClick={() => onChange(opt.val)}
             className={cn(
-              "rounded-full border px-4 py-1.5 text-sm font-medium transition-colors",
+              "min-h-11 rounded-full border px-5 py-1.5 text-sm font-medium transition-colors md:min-h-0 md:px-4",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
               "disabled:cursor-not-allowed disabled:opacity-50",
               selected

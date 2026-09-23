@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import type { Executor, Transaction } from "@/db";
 import { paymentTransactions, paymentAdjustments, paymentSchedules } from "@/db/schema";
@@ -73,8 +73,18 @@ export async function getFinancialSummary(consultancy: ConsultancyRow) {
     getTotalAuthorisedAdjustments(consultancy.id),
     db.query.paymentSchedules.findMany({ where: eq(paymentSchedules.consultancyId, consultancy.id) }),
   ]);
+  return computeFinancialSummary(consultancy.totalValue, { totalReceived, authorisedAdjustments, schedules });
+}
 
-  const totalValue = consultancy.totalValue == null ? 0 : Number(consultancy.totalValue);
+export type FinancialSummary = ReturnType<typeof computeFinancialSummary>;
+
+/** The pure half of `getFinancialSummary` — shared with the batched `getFinancialSummaries` so both derive identical numbers and status. */
+function computeFinancialSummary(
+  totalValueRaw: string | number | null,
+  input: { totalReceived: number; authorisedAdjustments: number; schedules: { plannedDate: string | null; plannedAmount: string }[] }
+) {
+  const { totalReceived, authorisedAdjustments, schedules } = input;
+  const totalValue = totalValueRaw == null ? 0 : Number(totalValueRaw);
   const amountPending = totalValue - totalReceived - authorisedAdjustments;
 
   const today = new Date().toISOString().slice(0, 10);
@@ -100,4 +110,74 @@ export async function getFinancialSummary(consultancy: ConsultancyRow) {
     amountPending,
     paymentStatus,
   };
+}
+
+/** Postgres caps a statement at 65,535 bind parameters; stay well under it. */
+const ID_CHUNK = 5000;
+
+async function rowsForIds<T>(ids: string[], fetch: (chunk: string[]) => Promise<T[]>): Promise<T[]> {
+  const out: T[] = [];
+  for (let i = 0; i < ids.length; i += ID_CHUNK) out.push(...(await fetch(ids.slice(i, i + ID_CHUNK))));
+  return out;
+}
+
+/**
+ * `getFinancialSummary` for many consultancies at once — three queries in
+ * total instead of three per consultancy (the per-row version took ~4s for
+ * the institution-wide financial report). Amounts are summed in JS in row
+ * order, exactly as `sumAmounts` does, so every figure matches the
+ * single-consultancy version bit for bit.
+ */
+export async function getFinancialSummaries(
+  consultancies: { id: string; totalValue: string | number | null }[]
+): Promise<Map<string, FinancialSummary>> {
+  const ids = consultancies.map((c) => c.id);
+  const [transactions, adjustments, schedules] = await Promise.all([
+    rowsForIds(ids, (chunk) =>
+      db
+        .select({ consultancyId: paymentTransactions.consultancyId, amount: paymentTransactions.amount })
+        .from(paymentTransactions)
+        .where(inArray(paymentTransactions.consultancyId, chunk))
+    ),
+    rowsForIds(ids, (chunk) =>
+      db
+        .select({ consultancyId: paymentAdjustments.consultancyId, amount: paymentAdjustments.amount })
+        .from(paymentAdjustments)
+        .where(inArray(paymentAdjustments.consultancyId, chunk))
+    ),
+    rowsForIds(ids, (chunk) =>
+      db
+        .select({
+          consultancyId: paymentSchedules.consultancyId,
+          plannedDate: paymentSchedules.plannedDate,
+          plannedAmount: paymentSchedules.plannedAmount,
+        })
+        .from(paymentSchedules)
+        .where(inArray(paymentSchedules.consultancyId, chunk))
+    ),
+  ]);
+
+  const group = <T extends { consultancyId: string }>(rows: T[]) => {
+    const map = new Map<string, T[]>();
+    for (const row of rows) {
+      const list = map.get(row.consultancyId);
+      if (list) list.push(row);
+      else map.set(row.consultancyId, [row]);
+    }
+    return map;
+  };
+  const txBy = group(transactions);
+  const adjBy = group(adjustments);
+  const schedBy = group(schedules);
+
+  return new Map(
+    consultancies.map((c) => [
+      c.id,
+      computeFinancialSummary(c.totalValue, {
+        totalReceived: sumAmounts(txBy.get(c.id) ?? []),
+        authorisedAdjustments: sumAmounts(adjBy.get(c.id) ?? []),
+        schedules: schedBy.get(c.id) ?? [],
+      }),
+    ])
+  );
 }

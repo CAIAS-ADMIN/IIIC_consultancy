@@ -1,10 +1,12 @@
-import { and, count, desc, eq, gte, ilike, lte, getTableColumns, type SQL } from "drizzle-orm";
+import { and, count, desc, eq, gte, ilike, lte, or, getTableColumns, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { consultancies, clients } from "@/db/schema";
 import { consultancyStatusEnum, paymentStatusEnum, type ConsultancyStatus, type PaymentStatus } from "@/db/schema/enums";
-import { getFinancialSummary } from "./financials";
+import { getFinancialSummaries } from "./financials";
 
 export type ConsultancySearchFilters = {
+  /** Free text — partial match on Consultancy ID, title, or client name. */
+  q?: string;
   consultancyCode?: string;
   departmentId?: string;
   facultyInChargeId?: string;
@@ -28,6 +30,7 @@ export function parseSearchFilters(searchParams: URLSearchParams): ConsultancySe
     return raw === undefined ? undefined : raw === "true";
   };
   return {
+    q: get("q")?.trim() || undefined,
     consultancyCode: get("consultancyCode"),
     departmentId: get("departmentId"),
     facultyInChargeId: get("facultyInChargeId"),
@@ -57,6 +60,12 @@ function buildSqlConditions(filters: ConsultancySearchFilters, scopeDepartmentId
   const conditions: SQL[] = [];
   const departmentFilter = scopeDepartmentId ?? filters.departmentId;
   if (departmentFilter) conditions.push(eq(consultancies.departmentId, departmentFilter));
+  if (filters.q) {
+    const pattern = `%${filters.q}%`;
+    conditions.push(
+      or(ilike(consultancies.consultancyCode, pattern), ilike(consultancies.title, pattern), ilike(clients.organizationName, pattern))!
+    );
+  }
   if (filters.consultancyCode) conditions.push(ilike(consultancies.consultancyCode, `%${filters.consultancyCode}%`));
   if (filters.facultyInChargeId) conditions.push(eq(consultancies.facultyInChargeId, filters.facultyInChargeId));
   if (filters.status) conditions.push(eq(consultancies.status, filters.status));
@@ -105,10 +114,8 @@ export async function searchConsultancies(
   }
 
   const allMatching = await baseQuery;
-  const withPaymentStatus = await Promise.all(
-    allMatching.map(async (row) => ({ row, paymentStatus: (await getFinancialSummary(row)).paymentStatus }))
-  );
-  const filtered = withPaymentStatus.filter((r) => r.paymentStatus === filters.paymentStatus).map((r) => r.row);
+  const summaries = await getFinancialSummaries(allMatching);
+  const filtered = allMatching.filter((row) => summaries.get(row.id)?.paymentStatus === filters.paymentStatus);
   const paged = filtered.slice((page - 1) * pageSize, page * pageSize);
   return { rows: paged, total: filtered.length, page, pageSize };
 }
@@ -132,8 +139,6 @@ export async function searchAllForExport(filters: ConsultancySearchFilters, scop
     return rows;
   }
 
-  const withPaymentStatus = await Promise.all(
-    rows.map(async (row) => ({ row, paymentStatus: (await getFinancialSummary(row)).paymentStatus }))
-  );
-  return withPaymentStatus.filter((r) => r.paymentStatus === filters.paymentStatus).map((r) => r.row);
+  const summaries = await getFinancialSummaries(rows);
+  return rows.filter((row) => summaries.get(row.id)?.paymentStatus === filters.paymentStatus);
 }

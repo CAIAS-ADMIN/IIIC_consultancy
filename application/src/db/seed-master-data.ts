@@ -1,13 +1,20 @@
 import "dotenv/config";
 import { db } from "./index";
 import { masterData } from "./schema";
+import { getCurrentAcademicYearCode } from "../lib/academic-year";
 
 /**
  * Seeds the real dropdown option lists from
  * CAIAS_Consultancy_Online_System_Field_Dropdown_Structure.docx (sections 3,
  * 4, 5, 7). Idempotent: re-running upserts by (category, code).
  */
-const ENTRIES: Array<{ category: string; code: string; label: string; sortOrder: number }> = [
+const ENTRIES: Array<{
+  category: string;
+  code: string;
+  label: string;
+  sortOrder: number;
+  metadata?: { current: boolean };
+}> = [
   // Section 3 — Consultancy Area / Category
   ...[
     "Research & Technical",
@@ -95,6 +102,25 @@ const ENTRIES: Array<{ category: string; code: string; label: string; sortOrder:
     sortOrder: i,
   })),
 
+  // Academic Year — not a docx-sourced dropdown list (the docx doesn't name
+  // one), but `consultancies.academic_year_code` is free text on every
+  // record and the frontend build plan expects it to be admin-manageable
+  // master data like every other dropdown. Code/label are both the
+  // "YYYY-YY" string already used on existing records (e.g. "2025-26").
+  // Range includes a few years back plus one ahead (so a wizard can plan a
+  // consultancy starting next year) — which means sort order alone can't
+  // mark "current" (the row seeded last, "current+1", would always win).
+  // Instead the one row matching today's date gets `metadata.current: true`
+  // at seed time (see `getCurrentAcademicYear`'s DB-first lookup) — re-running
+  // this seed script in a later year correctly moves the flag forward.
+  ...academicYearRange(2023, 2029).map((label, i) => ({
+    category: "academic_year",
+    code: label,
+    label,
+    sortOrder: i,
+    metadata: { current: label === getCurrentAcademicYearCode() },
+  })),
+
   // Section 21 — Document Type
   ...[
     "MoU",
@@ -121,6 +147,14 @@ const ENTRIES: Array<{ category: string; code: string; label: string; sortOrder:
   ].map((label, i) => ({ category: "document_type", code: slug(label), label, sortOrder: i })),
 ];
 
+/** ["2023-24", "2024-25", ..., "2028-29"] — inclusive of `startYear`, exclusive of `endYearExclusive`. */
+function academicYearRange(startYear: number, endYearExclusive: number): string[] {
+  return Array.from({ length: endYearExclusive - startYear }, (_, i) => {
+    const year = startYear + i;
+    return `${year}-${String((year + 1) % 100).padStart(2, "0")}`;
+  });
+}
+
 function slug(label: string): string {
   return label
     .toLowerCase()
@@ -139,7 +173,7 @@ async function main() {
       .values(entry)
       .onConflictDoUpdate({
         target: [masterData.category, masterData.code],
-        set: { label: entry.label, sortOrder: entry.sortOrder },
+        set: { label: entry.label, sortOrder: entry.sortOrder, metadata: entry.metadata ?? null },
       });
   }
   console.log("Done.");

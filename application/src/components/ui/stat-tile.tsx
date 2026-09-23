@@ -14,7 +14,7 @@ export function StatTile({
 }) {
   const toneClass = {
     neutral: "text-foreground",
-    accent: "text-accent",
+    accent: "text-accent-strong",
     primary: "text-primary",
     danger: "text-status-danger-fg",
   }[tone];

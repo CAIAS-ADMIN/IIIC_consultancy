@@ -1,7 +1,7 @@
 import { eq, getTableColumns } from "drizzle-orm";
 import { db } from "@/db";
 import { consultancies, clients } from "@/db/schema";
-import { getFinancialSummary } from "@/lib/consultancy/financials";
+import { getFinancialSummaries } from "@/lib/consultancy/financials";
 
 function groupCount<T>(rows: T[], keyFn: (row: T) => string): { key: string; count: number }[] {
   const counts = new Map<string, number>();
@@ -63,7 +63,8 @@ export async function getFinancialsReport(scopeDepartmentId: string | null | und
     .from(consultancies)
     .where(scopeDepartmentId ? eq(consultancies.departmentId, scopeDepartmentId) : undefined);
 
-  const withFinancials = await Promise.all(rows.map(async (row) => ({ row, financial: await getFinancialSummary(row) })));
+  const summaries = await getFinancialSummaries(rows);
+  const withFinancials = rows.map((row) => ({ row, financial: summaries.get(row.id)! }));
 
   return {
     byDepartment: groupFinancialSum(withFinancials, (r) => r.departmentId),

@@ -6,12 +6,16 @@ import {
   BarChart3,
   ClipboardCheck,
   Building2,
+  BookMarked,
+  Database,
   type LucideIcon,
 } from "lucide-react";
 import type { Role } from "@/db/schema/enums";
 
 export type NavItem = {
   label: string;
+  /** Used in the mobile bottom tab bar, where 5 columns at 375px leave ~70px per label. */
+  shortLabel?: string;
   href: string;
   icon: LucideIcon;
 };
@@ -32,26 +36,48 @@ export function isOversightRole(roles: Role[]): boolean {
 
 const FACULTY_NAV: NavItem[] = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { label: "New Consultancy", href: "/consultancies/new", icon: FilePlus },
-  { label: "My Consultancies", href: "/consultancies", icon: FileText },
+  { label: "New Consultancy", shortLabel: "New", href: "/consultancies/new", icon: FilePlus },
+  { label: "My Consultancies", shortLabel: "Mine", href: "/consultancies", icon: FileText },
   { label: "Documents", href: "/documents", icon: Folder },
   { label: "Reports", href: "/reports", icon: BarChart3 },
 ];
 
-/** hod / iiic_admin / system_admin — same admin-oriented set, incl. New Consultancy per the backend role matrix. */
+/** hod / iiic_admin — admin-oriented set, incl. New Consultancy per the backend role matrix. */
 const OVERSIGHT_CORE_NAV: NavItem[] = [
   { label: "Overview", href: "/dashboard", icon: LayoutDashboard },
-  { label: "New Consultancy", href: "/consultancies/new", icon: FilePlus },
-  { label: "Verification Queue", href: "/verification-queue", icon: ClipboardCheck },
-  { label: "All Consultancies", href: "/consultancies", icon: FileText },
+  { label: "New Consultancy", shortLabel: "New", href: "/consultancies/new", icon: FilePlus },
+  { label: "Verification Queue", shortLabel: "Queue", href: "/verification-queue", icon: ClipboardCheck },
+  { label: "All Consultancies", shortLabel: "All", href: "/consultancies", icon: FileText },
+  { label: "Register", href: "/consultancies/register", icon: BookMarked },
   { label: "Departments", href: "/departments", icon: Building2 },
   { label: "Reports", href: "/reports", icon: BarChart3 },
 ];
 
-/** finance, competent_authority, audit_readonly — minimal, read-oriented set (finance also has no write-nav items here; its write UI lives on the consultancy detail page in later phases). */
+/** system_admin — the oversight set plus Master Data, which must be absent from every other role's nav. */
+const SYSTEM_ADMIN_NAV: NavItem[] = [
+  ...OVERSIGHT_CORE_NAV,
+  { label: "Master Data", shortLabel: "Data", href: "/master-data", icon: Database },
+];
+
+/**
+ * competent_authority — a real, configurable `approval_stage_configs`
+ * approver role (Phase 6/Phase 5-frontend), so unlike finance/audit_readonly
+ * it needs a way to actually reach the queue it approves from. No "New
+ * Consultancy"/"Departments" though — those aren't this role's job.
+ */
+const COMPETENT_AUTHORITY_NAV: NavItem[] = [
+  { label: "Overview", href: "/dashboard", icon: LayoutDashboard },
+  { label: "Verification Queue", shortLabel: "Queue", href: "/verification-queue", icon: ClipboardCheck },
+  { label: "All Consultancies", shortLabel: "All", href: "/consultancies", icon: FileText },
+  { label: "Register", href: "/consultancies/register", icon: BookMarked },
+  { label: "Reports", href: "/reports", icon: BarChart3 },
+];
+
+/** finance, audit_readonly — minimal, read-oriented set (finance also has no write-nav items here; its write UI lives on the consultancy detail page in later phases). */
 const MINIMAL_NAV: NavItem[] = [
   { label: "Overview", href: "/dashboard", icon: LayoutDashboard },
-  { label: "All Consultancies", href: "/consultancies", icon: FileText },
+  { label: "All Consultancies", shortLabel: "All", href: "/consultancies", icon: FileText },
+  { label: "Register", href: "/consultancies/register", icon: BookMarked },
   { label: "Reports", href: "/reports", icon: BarChart3 },
 ];
 
@@ -61,8 +87,10 @@ const MINIMAL_NAV: NavItem[] = [
  * theirs) rather than a union of items across groups.
  */
 const NAV_GROUPS: { roles: Role[]; items: NavItem[] }[] = [
-  { roles: ["system_admin", "iiic_admin", "hod"], items: OVERSIGHT_CORE_NAV },
-  { roles: ["finance", "competent_authority", "audit_readonly"], items: MINIMAL_NAV },
+  { roles: ["system_admin"], items: SYSTEM_ADMIN_NAV },
+  { roles: ["iiic_admin", "hod"], items: OVERSIGHT_CORE_NAV },
+  { roles: ["competent_authority"], items: COMPETENT_AUTHORITY_NAV },
+  { roles: ["finance", "audit_readonly"], items: MINIMAL_NAV },
   { roles: ["faculty"], items: FACULTY_NAV },
 ];
 

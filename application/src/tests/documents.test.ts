@@ -194,6 +194,49 @@ test("a restricted document is not downloadable by an unrelated faculty user, bu
   assert.equal(adminRes.status, 200);
 });
 
+test("GET /api/consultancies/:id/documents lists every version of every category, newest version first, with a per-row viewerCanDownload flag", async () => {
+  // v1 + v2 of Signed Agreement already exist on this consultancy from the earlier test.
+  const restrictedPresign = await presign(facultyCookie, { documentCategory: "Client Feedback" });
+  const { uploadUrl, objectKey } = (await restrictedPresign.json()).data;
+  await fetch(uploadUrl, { method: "PUT", body: "list-route restricted content" });
+  await confirm(facultyCookie, {
+    consultancyId,
+    objectKey,
+    documentCategory: "Client Feedback",
+    originalFileName: "feedback-for-list.txt",
+    confidentialityLevel: "restricted",
+  });
+
+  const ownerRes = await fetch(`${BASE_URL}/api/consultancies/${consultancyId}/documents`, {
+    headers: { cookie: facultyCookie },
+  });
+  assert.equal(ownerRes.status, 200);
+  const ownerBody = await ownerRes.json();
+  const signedAgreementRows = ownerBody.data.filter((r: { documentCategory: string }) => r.documentCategory === "Signed Agreement");
+  assert.equal(signedAgreementRows.length, 2);
+  assert.deepEqual(signedAgreementRows.map((r: { version: number }) => r.version), [2, 1]); // newest first
+  assert.ok(signedAgreementRows.every((r: { uploadedByName: string }) => r.uploadedByName === "Documents Test Faculty"));
+  assert.ok(ownerBody.data.every((r: { viewerCanDownload: boolean }) => r.viewerCanDownload === true));
+
+  // An unrelated faculty user sees the same rows (metadata isn't gated) but is flagged unable to download the restricted one.
+  const otherRes = await fetch(`${BASE_URL}/api/consultancies/${consultancyId}/documents`, {
+    headers: { cookie: otherFacultyCookie },
+  });
+  const otherBody = await otherRes.json();
+  assert.equal(otherBody.data.length, ownerBody.data.length);
+  const restrictedRow = otherBody.data.find((r: { documentCategory: string }) => r.documentCategory === "Client Feedback");
+  assert.equal(restrictedRow.viewerCanDownload, false);
+  const publicRow = otherBody.data.find((r: { documentCategory: string }) => r.documentCategory === "Signed Agreement");
+  assert.equal(publicRow.viewerCanDownload, true);
+
+  // category filter
+  const filteredRes = await fetch(`${BASE_URL}/api/consultancies/${consultancyId}/documents?category=${encodeURIComponent("Client Feedback")}`, {
+    headers: { cookie: facultyCookie },
+  });
+  const filteredBody = await filteredRes.json();
+  assert.ok(filteredBody.data.every((r: { documentCategory: string }) => r.documentCategory === "Client Feedback"));
+});
+
 test("download of an unknown document id is 404", async () => {
   const res = await fetch(`${BASE_URL}/api/documents/00000000-0000-0000-0000-000000000000/download`, {
     headers: { cookie: facultyCookie },

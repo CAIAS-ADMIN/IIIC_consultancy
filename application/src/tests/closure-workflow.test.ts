@@ -1,9 +1,12 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { eq } from "drizzle-orm";
 import { createTestSessionCookie } from "./helpers/session";
 import { upsertTestUser, upsertTestDepartment, upsertTestApprovalStageConfig, BASE_URL } from "./helpers/fixtures";
 import { closeDb, db } from "@/db";
-import { documents } from "@/db/schema";
+import { documents, closures } from "@/db/schema";
+import { getConsultancyById } from "@/db/queries/consultancies";
+import { checkClosureGates } from "@/lib/consultancy/closure-gates";
 
 let facultyCookie: string;
 let facultyId: string;
@@ -258,6 +261,27 @@ test("clarification_required returns the consultancy to active, and it can be cl
   assert.equal(finalRes.status, 200);
   const final = (await finalRes.json()).data;
   assert.equal(final.consultancy.status, "completed_closed");
+});
+
+test("checkClosureGates returns a structured, itemized checklist alongside the flat reasons list", async () => {
+  const consultancy = await createActiveConsultancy(); // totalValue 50000, nothing paid
+
+  const requestRes = await requestClosure(consultancy.id);
+  const closureData = (await requestRes.json()).data;
+
+  const consultancyRow = await getConsultancyById(consultancy.id);
+  const closureRow = await db.query.closures.findFirst({ where: eq(closures.id, closureData.id) });
+  const gate = await checkClosureGates(consultancyRow!, closureRow!);
+
+  assert.equal(gate.ok, false);
+  const financialItem = gate.items.find((i) => i.key === "financial");
+  assert.equal(financialItem?.ok, false);
+  assert.match(String(financialItem?.reason), /outstanding balance/i);
+  // final report and deliverables both pass — real deliverable + real uploaded final report from the fixtures
+  assert.equal(gate.items.find((i) => i.key === "final_report")?.ok, true);
+  assert.equal(gate.items.find((i) => i.key === "deliverables")?.ok, true);
+  // flat reasons list still matches the failing items exactly (backward-compatible with `verifyClosure`'s existing usage)
+  assert.deepEqual(gate.reasons, gate.items.filter((i) => !i.ok).map((i) => i.reason));
 });
 
 test("the generated Closure Record correctly aggregates data from all three lifecycle stages", async () => {

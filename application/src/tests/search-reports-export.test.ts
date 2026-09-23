@@ -186,6 +186,21 @@ test("a faculty-only user's search is scoped to their own department, even if th
   assert.ok(!ids.includes(otherDept.id));
 });
 
+test("the plain consultancy list (GET /api/consultancies) is department-scoped for faculty, unrestricted for oversight roles", async () => {
+  const ownDept = await createSubmittedConsultancy(facultyACookie, departmentAId, "Plain List Own Dept");
+  const otherDept = await createSubmittedConsultancy(facultyBCookie, departmentBId, "Plain List Other Dept");
+
+  const facultyRes = await fetch(`${BASE_URL}/api/consultancies`, { headers: { cookie: facultyACookie } });
+  const facultyIds = (await facultyRes.json()).data.map((r: { id: string }) => r.id);
+  assert.ok(facultyIds.includes(ownDept.id));
+  assert.ok(!facultyIds.includes(otherDept.id));
+
+  const adminRes = await fetch(`${BASE_URL}/api/consultancies`, { headers: { cookie: systemAdminCookie } });
+  const adminIds = (await adminRes.json()).data.map((r: { id: string }) => r.id);
+  assert.ok(adminIds.includes(ownDept.id));
+  assert.ok(adminIds.includes(otherDept.id));
+});
+
 test("export produces a CSV matching the filtered search result set, and rejects export outside a faculty user's own department", async () => {
   const targetDept = await createSubmittedConsultancy(facultyACookie, departmentAId, "CSV Export Client");
 
@@ -247,4 +262,26 @@ test("aggregate report queries group by status/department/academic year, and fin
 
   // hod is not restricted to their own department for reports because they're an oversight role
   assert.ok(consultancy.id);
+});
+
+test("the Reports UI's filter keys are exactly the params the search/export backend parses", async () => {
+  const { parseSearchFilters } = await import("@/lib/consultancy/search");
+  const { SEARCH_FILTER_KEYS } = await import("@/lib/consultancy/search-keys");
+  assert.deepEqual(Object.keys(parseSearchFilters(new URLSearchParams())).sort(), [...SEARCH_FILTER_KEYS].sort());
+});
+
+test("free-text q matches Consultancy ID, title, or client name (partial, case-insensitive)", async () => {
+  const unique = `Qzx${Date.now().toString(36)}`;
+  const target = await createSubmittedConsultancy(facultyACookie, departmentAId, `${unique} Industries`);
+  const search = async (q: string) => {
+    const res = await fetch(`${BASE_URL}/api/consultancies/search?q=${encodeURIComponent(q)}&pageSize=100`, {
+      headers: { cookie: hodACookie },
+    });
+    assert.equal(res.status, 200);
+    return ((await res.json()).data as { id: string }[]).map((r) => r.id);
+  };
+
+  assert.deepEqual(await search(unique.toLowerCase()), [target.id], "client-name match");
+  assert.ok((await search(target.consultancyCode.slice(-8))).includes(target.id), "consultancy-ID match");
+  assert.deepEqual(await search(`${unique}-no-such-thing`), []);
 });

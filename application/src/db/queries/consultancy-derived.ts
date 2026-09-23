@@ -10,8 +10,8 @@ type ConsultancyRow = NonNullable<Awaited<ReturnType<typeof getConsultancyById>>
  * outcome, or (Phase 8) the clock is deliberately paused: time spent
  * `on_hold` must not trigger a false Delayed/overdue flag.
  */
-const NOT_OVERDUE_ELIGIBLE_STATUSES = ["completed_closed", "cancelled", "terminated", "rejected", "on_hold"];
-const CLOSED_MILESTONE_STATUSES = ["completed", "cancelled"] as const;
+export const NOT_OVERDUE_ELIGIBLE_STATUSES = ["completed_closed", "cancelled", "terminated", "rejected", "on_hold"];
+export const CLOSED_MILESTONE_STATUSES = ["completed", "cancelled"] as const;
 
 function daysBetween(from: Date, to: Date): number {
   const msPerDay = 24 * 60 * 60 * 1000;

@@ -14,10 +14,10 @@ const buttonVariants = cva(
         destructive: "bg-status-danger-fg text-white hover:opacity-90",
       },
       size: {
-        default: "h-10 px-4 py-2",
-        sm: "h-9 px-3 text-sm",
+        default: "h-11 px-4 py-2 md:h-10",
+        sm: "h-11 px-3 text-sm md:h-9",
         lg: "h-11 px-6 text-base",
-        icon: "h-10 w-10",
+        icon: "h-11 w-11 md:h-10 md:w-10",
       },
     },
     defaultVariants: {
