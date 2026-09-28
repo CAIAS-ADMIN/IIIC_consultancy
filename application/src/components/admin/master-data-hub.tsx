@@ -2,13 +2,15 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Edit2, CheckCircle2, XCircle, History, Database } from "lucide-react";
+import { Plus, Edit2, CheckCircle2, XCircle, History, Database, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
+import { FilterInput } from "@/components/ui/filter-input";
+import { matchesQuery } from "@/lib/search";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/use-toast";
@@ -78,8 +80,13 @@ export function MasterDataHub({ items, auditLogs }: { items: MasterDataItem[]; a
   const [form, setForm] = React.useState<FormState>(EMPTY_FORM);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [togglingId, setTogglingId] = React.useState<string | null>(null);
+  const [deleting, setDeleting] = React.useState<MasterDataItem | null>(null);
+  const [deleteBlocked, setDeleteBlocked] = React.useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = React.useState(false);
 
-  const filteredItems = items.filter((i) => i.category === selectedCategory);
+  const [filter, setFilter] = React.useState("");
+  const categoryItems = items.filter((i) => i.category === selectedCategory);
+  const filteredItems = categoryItems.filter((i) => matchesQuery(filter, i.label, i.code));
   const itemLabelById = React.useMemo(() => new Map(items.map((i) => [i.id, `${categoryLabel(i.category)} · ${i.label}`])), [items]);
 
   const openAdd = () => {
@@ -145,6 +152,33 @@ export function MasterDataHub({ items, auditLogs }: { items: MasterDataItem[]; a
     }
   };
 
+  const openDelete = (item: MasterDataItem) => {
+    setDeleteBlocked(null);
+    setDeleting(item);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleting) return;
+    setIsDeleting(true);
+    try {
+      const res = await fetch(`/api/master-data/${deleting.id}`, { method: "DELETE" });
+      const json = await res.json().catch(() => ({}));
+      if (res.status === 409) {
+        // In use — explain where, and offer Deactivate instead.
+        setDeleteBlocked(apiErrorMessage(json, "This value is in use and can't be deleted."));
+        return;
+      }
+      if (!res.ok) throw new Error(apiErrorMessage(json, `Could not delete (${res.status})`));
+      toast({ title: "Deleted", description: deleting.label, variant: "success" });
+      setDeleting(null);
+      router.refresh();
+    } catch (err) {
+      toast({ title: "Delete failed", description: err instanceof Error ? err.message : "Could not delete.", variant: "destructive" });
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const columns: DataTableColumn<MasterDataItem>[] = [
     { header: "Label", cell: (r) => <span className="font-medium text-foreground">{r.label}</span>, primary: true },
     { header: "Code", cell: (r) => <span className="font-mono text-xs text-muted-foreground">{r.code}</span> },
@@ -171,6 +205,15 @@ export function MasterDataHub({ items, auditLogs }: { items: MasterDataItem[]; a
           </Button>
           <Button variant="ghost" size="sm" disabled={togglingId === r.id} onClick={() => toggleActive(r)}>
             {r.isActive ? "Deactivate" : "Activate"}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => openDelete(r)}
+            className="gap-1 text-status-danger-fg"
+            aria-label={`Delete ${r.label}`}
+          >
+            <Trash2 className="h-3.5 w-3.5" aria-hidden /> Delete
           </Button>
         </div>
       ),
@@ -217,7 +260,10 @@ export function MasterDataHub({ items, auditLogs }: { items: MasterDataItem[]; a
                 return (
                   <button
                     key={c}
-                    onClick={() => setSelectedCategory(c)}
+                    onClick={() => {
+                      setSelectedCategory(c);
+                      setFilter("");
+                    }}
                     aria-current={selected ? "true" : undefined}
                     className={`flex min-h-11 shrink-0 items-center justify-between gap-3 rounded-md px-3 text-sm font-medium transition-colors ${
                       selected ? "bg-primary-soft text-primary" : "text-muted-foreground hover:bg-background hover:text-foreground"
@@ -237,12 +283,27 @@ export function MasterDataHub({ items, auditLogs }: { items: MasterDataItem[]; a
                 <CardTitle className="text-base font-semibold">{categoryLabel(selectedCategory)}</CardTitle>
                 <p className="font-mono text-xs text-muted-foreground">{selectedCategory}</p>
               </CardHeader>
-              <CardContent>
+              <CardContent className="flex flex-col gap-4">
+                {categoryItems.length > 0 && (
+                  <FilterInput
+                    id="master-data-filter"
+                    label={`Search ${categoryLabel(selectedCategory)}`}
+                    placeholder="Search label or code"
+                    value={filter}
+                    onChange={setFilter}
+                  />
+                )}
                 <DataTable
                   columns={columns}
                   data={filteredItems}
                   keyFor={(r) => r.id}
-                  emptyState={<EmptyState title="No values in this category" description="Add the first value with the Add button." />}
+                  emptyState={
+                    filter.trim() && categoryItems.length > 0 ? (
+                      <EmptyState title="No matches" description={`No value in this category matches “${filter.trim()}”.`} />
+                    ) : (
+                      <EmptyState title="No values in this category" description="Add the first value with the Add button." />
+                    )
+                  }
                 />
               </CardContent>
             </Card>
@@ -264,7 +325,7 @@ export function MasterDataHub({ items, auditLogs }: { items: MasterDataItem[]; a
                     log.action === "created" ? log.newValue?.[f] !== undefined : log.oldValue?.[f] !== log.newValue?.[f]
                   );
                   const subject =
-                    (log.newValue?.label as string | undefined) ?? itemLabelById.get(log.entityId) ?? log.entityId;
+                    (log.newValue?.label as string | undefined) ?? itemLabelById.get(log.entityId) ?? (log.oldValue?.label as string | undefined) ?? log.entityId;
                   return (
                     <li key={log.id} className="flex flex-col gap-2 rounded-md border border-border p-3 text-xs">
                       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
@@ -351,6 +412,55 @@ export function MasterDataHub({ items, auditLogs }: { items: MasterDataItem[]; a
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deleting !== null} onOpenChange={(open) => !open && setDeleting(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{deleteBlocked ? "Can't delete this value" : "Delete this value?"}</DialogTitle>
+            <DialogDescription>
+              {deleting && (
+                <>
+                  <span className="font-medium text-foreground">{deleting.label}</span>{" "}
+                  <span className="font-mono text-xs">({deleting.code})</span> · {categoryLabel(deleting.category)}
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          {deleteBlocked ? (
+            <p role="alert" className="rounded-md border border-status-warning-fg/30 bg-status-warning-bg p-3 text-sm text-status-warning-fg">
+              {deleteBlocked}
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              It will be removed from every dropdown permanently. Values already used on a consultancy can&apos;t be deleted — you&apos;ll be told
+              where it&apos;s used and can deactivate it instead.
+            </p>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="secondary" onClick={() => setDeleting(null)}>
+              {deleteBlocked ? "Close" : "Cancel"}
+            </Button>
+            {deleteBlocked ? (
+              deleting?.isActive && (
+                <Button
+                  type="button"
+                  disabled={togglingId === deleting.id}
+                  onClick={async () => {
+                    await toggleActive(deleting);
+                    setDeleting(null);
+                  }}
+                >
+                  Deactivate instead
+                </Button>
+              )
+            ) : (
+              <Button type="button" variant="destructive" disabled={isDeleting} onClick={confirmDelete}>
+                {isDeleting ? "Deleting…" : "Delete"}
+              </Button>
+            )}
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

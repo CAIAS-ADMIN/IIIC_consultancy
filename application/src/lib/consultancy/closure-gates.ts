@@ -29,6 +29,13 @@ export type ClosureGateResult = { ok: boolean; reasons: string[]; items: Closure
 export async function checkClosureGates(consultancy: ConsultancyRow, closure: ClosureRow): Promise<ClosureGateResult> {
   const items: ClosureGateItem[] = [];
 
+  // Spec §57 "Final completion details entered."
+  const completionReason =
+    !closure.actualCompletionDate || !closure.finalOutcome || closure.finalProgressPercent === null
+      ? "Final completion details (completion date, final progress, final outcome) are incomplete"
+      : null;
+  items.push({ key: "completion_details", label: "Completion Details", ok: completionReason === null, reason: completionReason });
+
   let finalReportReason: string | null = null;
   if (!closure.finalReportDocumentId) {
     finalReportReason = "Final report document is missing";
@@ -44,9 +51,17 @@ export async function checkClosureGates(consultancy: ConsultancyRow, closure: Cl
   const deliverablesReason = deliverableRows.length === 0 ? "No deliverables are recorded for this consultancy" : null;
   items.push({ key: "deliverables", label: "Deliverables", ok: deliverablesReason === null, reason: deliverablesReason });
 
+  // Spec §58 — enforced only when this consultancy requires acceptance.
   if (consultancy.clientAcceptanceRequired) {
-    const acceptance = await db.query.clientAcceptances.findFirst({ where: eq(clientAcceptances.consultancyId, consultancy.id) });
-    const reason = acceptance ? null : "Client acceptance is required but not on record";
+    const acceptance = await db.query.clientAcceptances.findFirst({
+      where: eq(clientAcceptances.consultancyId, consultancy.id),
+      orderBy: (row, { desc }) => [desc(row.createdAt)],
+    });
+    const reason = !acceptance
+      ? "Client acceptance is required but not on record"
+      : acceptance.acceptanceStatus !== "yes"
+        ? "The client has not accepted the consultancy outcome"
+        : null;
     items.push({ key: "client_acceptance", label: "Client Acceptance", ok: reason === null, reason });
   }
 
@@ -58,7 +73,20 @@ export async function checkClosureGates(consultancy: ConsultancyRow, closure: Cl
       financialReason = `Outstanding balance of ${summary.amountPending.toFixed(2)} has no authorised exception on record`;
     }
   }
-  items.push({ key: "financial", label: "Financial Verification", ok: financialReason === null, reason: financialReason });
+  items.push({ key: "financial", label: "Payment Received / Exception", ok: financialReason === null, reason: financialReason });
+
+  // Spec §27 / §57 — "Finance has verified the financial status."
+  const financeReason =
+    closure.financeVerificationStatus === "verified"
+      ? null
+      : closure.financeVerificationStatus === "discrepancy"
+        ? `Finance flagged a discrepancy${closure.financeRemarks ? `: ${closure.financeRemarks}` : ""}`
+        : "Finance has not yet verified the financial status";
+  items.push({ key: "finance_verification", label: "Finance Verification", ok: financeReason === null, reason: financeReason });
+
+  // Spec §57 — "Final closure declaration completed."
+  const declarationReason = closure.declarationAcceptedAt ? null : "The consultant's closure declaration is missing";
+  items.push({ key: "declaration", label: "Closure Declaration", ok: declarationReason === null, reason: declarationReason });
 
   const reasons = items.filter((i) => !i.ok).map((i) => i.reason!);
   return { ok: reasons.length === 0, reasons, items };

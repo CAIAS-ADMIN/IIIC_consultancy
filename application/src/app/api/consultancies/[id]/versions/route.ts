@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { canViewConsultancy } from "@/lib/consultancy/access";
 import { eq, asc } from "drizzle-orm";
 import { requireSession } from "@/lib/auth/requireRole";
 import { authErrorResponse } from "@/lib/auth/errors";
@@ -8,8 +9,9 @@ import { getConsultancyById } from "@/db/queries/consultancies";
 
 /** GET /api/consultancies/:id/versions — pre-clarification snapshots, oldest first. */
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  let viewer;
   try {
-    await requireSession();
+    viewer = await requireSession();
   } catch (error) {
     return authErrorResponse(error);
   }
@@ -17,6 +19,9 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const { id } = await params;
   const consultancy = await getConsultancyById(id);
   if (!consultancy) {
+    return Response.json({ error: "Not found" }, { status: 404 });
+  }
+  if (!(await canViewConsultancy(viewer, consultancy))) {
     return Response.json({ error: "Not found" }, { status: 404 });
   }
 

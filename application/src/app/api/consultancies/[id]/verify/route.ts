@@ -6,7 +6,7 @@ import { db } from "@/db";
 import { consultancies, approvals, consultancyVersions } from "@/db/schema";
 import type { Role } from "@/db/schema/enums";
 import { getConsultancyById } from "@/db/queries/consultancies";
-import { resolveApprovalChain } from "@/lib/consultancy/approval-chain";
+import { resolveApprovalChain, approvalChainInputFor } from "@/lib/consultancy/approval-chain";
 import { assertWorkflowStage } from "@/lib/consultancy/workflow";
 import { buildConsultancySnapshot } from "@/lib/consultancy/snapshot";
 import { verifyStageSchema } from "@/lib/validation/verify";
@@ -56,11 +56,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     }
   }
 
-  const chain = await resolveApprovalChain(db, {
-    departmentId: existing.departmentId,
-    consultancyAreaCode: existing.consultancyAreaCode,
-    totalValue: existing.totalValue,
-  });
+  const chain = await resolveApprovalChain(db, approvalChainInputFor(existing));
   const currentIndex = chain.findIndex((s) => s.stage === existing.workflowStage);
   if (currentIndex === -1) {
     return Response.json(
@@ -71,8 +67,17 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const currentStage = chain[currentIndex];
 
   const requiredRole = currentStage.approverRole as Role;
-  if (!user.roles.includes(requiredRole) && !user.roles.includes("system_admin")) {
+  // CAIAS admins may decide on any stage — e.g. return a submission for re-edit or reject it.
+  const isAdmin = user.roles.includes("system_admin") || user.roles.includes("iiic_admin");
+  if (!user.roles.includes(requiredRole) && !isAdmin) {
     return Response.json({ error: `Forbidden: requires role '${requiredRole}'` }, { status: 403 });
+  }
+
+  if (requiredRole === "hod" && !isAdmin && (!user.departmentId || existing.departmentId !== user.departmentId)) {
+    return Response.json(
+      { error: "Forbidden: HOD can only verify consultancies for their own department" },
+      { status: 403 }
+    );
   }
 
   const result = await db.transaction(async (tx) => {
@@ -122,14 +127,32 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       if (isLastStage) {
         await notifyUser(
           {
-            userId: updated.createdBy,
+            userId: updated.facultyInChargeId,
             consultancyId: id,
             type: "registered",
             message: `Consultancy ${updated.consultancyCode} ("${updated.title}") has been registered.`,
           },
           tx
         );
+        await notifyRole(
+          {
+            role: "finance",
+            consultancyId: id,
+            type: "new_registered",
+            message: `New consultancy registered: ${updated.consultancyCode} ("${updated.title}").`,
+          },
+          tx
+        );
       } else {
+        await notifyUser(
+          {
+            userId: updated.facultyInChargeId,
+            consultancyId: id,
+            type: "stage_verified",
+            message: `Registration ${updated.consultancyCode} passed ${currentStage.stage.replace(/_pending$/, "").replace(/_/g, " ")} and moved to the next stage.`,
+          },
+          tx
+        );
         await notifyRole(
           {
             role: chain[currentIndex + 1].approverRole as Role,
@@ -168,7 +191,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
       await notifyUser(
         {
-          userId: updated.createdBy,
+          userId: updated.facultyInChargeId,
           consultancyId: id,
           type: "rejected",
           message: `Consultancy ${updated.consultancyCode ?? updated.title} was rejected during verification.`,
@@ -215,7 +238,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     await notifyUser(
       {
-        userId: updated.createdBy,
+        userId: updated.facultyInChargeId,
         consultancyId: id,
         type: "clarification_required",
         message: `Consultancy ${updated.consultancyCode ?? updated.title} was returned for clarification.`,

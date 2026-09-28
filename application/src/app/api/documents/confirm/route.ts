@@ -5,6 +5,7 @@ import { requireSession } from "@/lib/auth/requireRole";
 import { authErrorResponse } from "@/lib/auth/errors";
 import { confirmDocumentUploadSchema, MAX_DOCUMENT_UPLOAD_BYTES } from "@/lib/validation/documents";
 import { getConsultancyById } from "@/db/queries/consultancies";
+import { canManageDocuments } from "@/lib/consultancy/access";
 import { db } from "@/db";
 import { documents } from "@/db/schema";
 import { nextDocumentVersion } from "@/lib/documents/version";
@@ -12,7 +13,6 @@ import { scanDocument } from "@/lib/storage/scan";
 import { documentsBucket, s3Client } from "@/lib/storage/rustfs";
 import { recordAuditEvent } from "@/lib/audit";
 
-const EDITOR_ROLES = ["hod", "iiic_admin", "system_admin"] as const;
 
 /**
  * confirmDocumentUpload — called after the client's PUT to the presigned URL
@@ -38,7 +38,7 @@ export async function POST(request: NextRequest) {
   if (!consultancy) {
     return Response.json({ error: "Not found" }, { status: 404 });
   }
-  if (consultancy.createdBy !== user.id && !user.roles.some((r) => EDITOR_ROLES.includes(r as (typeof EDITOR_ROLES)[number]))) {
+  if (!canManageDocuments(user, consultancy)) {
     return Response.json({ error: "Forbidden" }, { status: 403 });
   }
   if (!objectKey.startsWith(`consultancies/${consultancyId}/`)) {

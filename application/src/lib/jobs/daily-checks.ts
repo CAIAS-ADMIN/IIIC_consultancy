@@ -1,11 +1,15 @@
-import { eq } from "drizzle-orm";
+import { and, eq, inArray, notInArray } from "drizzle-orm";
 import { db } from "@/db";
-import { consultancies, closures } from "@/db/schema";
+import { consultancies, closures, documents, milestones, paymentSchedules } from "@/db/schema";
 import { getFinancialSummary } from "@/lib/consultancy/financials";
 import { notifyUser, notifyRole } from "@/lib/notifications";
 import { recordAuditEvent } from "@/lib/audit";
 
 const THIRTY_DAYS_OUT_WINDOW = 30;
+/** Lead time for "milestone approaching" and "payment stage due" alerts. */
+const APPROACHING_WINDOW = 7;
+/** Required-document check runs once, this many days after activation. */
+const MISSING_DOCUMENTS_AFTER_DAYS = 7;
 
 function daysBetween(from: Date, to: Date): number {
   const msPerDay = 24 * 60 * 60 * 1000;
@@ -20,6 +24,10 @@ export type DailyChecksSummary = {
   autoTransitionedToDelayed: FlaggedConsultancy[];
   missingPayment: FlaggedConsultancy[];
   missingClosure: FlaggedConsultancy[];
+  milestoneApproaching: FlaggedConsultancy[];
+  milestoneOverdue: FlaggedConsultancy[];
+  paymentStageDue: FlaggedConsultancy[];
+  missingDocuments: FlaggedConsultancy[];
 };
 
 /**
@@ -38,6 +46,10 @@ export async function runDailyChecks(): Promise<DailyChecksSummary> {
     autoTransitionedToDelayed: [],
     missingPayment: [],
     missingClosure: [],
+    milestoneApproaching: [],
+    milestoneOverdue: [],
+    paymentStageDue: [],
+    missingDocuments: [],
   };
 
   const today = new Date();
@@ -100,6 +112,15 @@ export async function runDailyChecks(): Promise<DailyChecksSummary> {
           },
           tx
         );
+        await notifyRole(
+          {
+            role: "iiic_admin",
+            consultancyId: consultancy.id,
+            type: "auto_delayed",
+            message: `Delayed consultancy: ${consultancy.consultancyCode} ("${consultancy.title}") is past its completion date.`,
+          },
+          tx
+        );
       });
       summary.autoTransitionedToDelayed.push(flagged);
     }
@@ -136,5 +157,88 @@ export async function runDailyChecks(): Promise<DailyChecksSummary> {
     }
   }
 
+  await runMonitoringAlerts(today, summary);
   return summary;
+}
+
+/**
+ * Portal spec §34 / §60 monitoring alerts. Each fires on an exact day
+ * (N days before, or the first day overdue), so a daily run notifies once
+ * per event rather than every day.
+ */
+async function runMonitoringAlerts(today: Date, summary: DailyChecksSummary) {
+  const iso = (offsetDays: number) => new Date(today.getTime() + offsetDays * 86_400_000).toISOString().slice(0, 10);
+  const inWindow = iso(APPROACHING_WINDOW);
+  const firstOverdueDay = iso(-1);
+
+  const running = await db.select().from(consultancies).where(inArray(consultancies.status, ["active", "delayed"]));
+  if (running.length === 0) return;
+  const byId = new Map(running.map((c) => [c.id, c]));
+  const ids = [...byId.keys()];
+
+  const [openMilestones, dueStages, docRows] = await Promise.all([
+    db
+      .select()
+      .from(milestones)
+      .where(
+        and(
+          inArray(milestones.consultancyId, ids),
+          notInArray(milestones.status, ["completed", "cancelled"]),
+          inArray(milestones.plannedDate, [inWindow, firstOverdueDay])
+        )
+      ),
+    db
+      .select()
+      .from(paymentSchedules)
+      .where(and(inArray(paymentSchedules.consultancyId, ids), eq(paymentSchedules.plannedDate, inWindow))),
+    db
+      .select({ consultancyId: documents.consultancyId, category: documents.documentCategory })
+      .from(documents)
+      .where(and(inArray(documents.consultancyId, ids), eq(documents.status, "available"))),
+  ]);
+
+  for (const m of openMilestones) {
+    const c = byId.get(m.consultancyId)!;
+    const flagged = { consultancyId: c.id, consultancyCode: c.consultancyCode };
+    const approaching = m.plannedDate === inWindow;
+    (approaching ? summary.milestoneApproaching : summary.milestoneOverdue).push(flagged);
+    await notifyUser({
+      userId: c.facultyInChargeId,
+      consultancyId: c.id,
+      type: approaching ? "milestone_approaching" : "milestone_overdue",
+      message: approaching
+        ? `Milestone "${m.title}" on ${c.consultancyCode} is due in ${APPROACHING_WINDOW} days (${m.plannedDate}).`
+        : `Milestone "${m.title}" on ${c.consultancyCode} is overdue (planned ${m.plannedDate}).`,
+    });
+  }
+
+  for (const stage of dueStages) {
+    const c = byId.get(stage.consultancyId)!;
+    summary.paymentStageDue.push({ consultancyId: c.id, consultancyCode: c.consultancyCode });
+    await notifyRole({
+      role: "finance",
+      consultancyId: c.id,
+      type: "payment_stage_due",
+      message: `Payment stage "${stage.stageLabel}" (${Number(stage.plannedAmount).toFixed(2)}) on ${c.consultancyCode} is due on ${stage.plannedDate}.`,
+    });
+  }
+
+  // Required conditional documents still missing a week after activation.
+  const checkDay = iso(-MISSING_DOCUMENTS_AFTER_DAYS);
+  for (const c of running) {
+    if (!c.activatedAt || c.activatedAt.toISOString().slice(0, 10) !== checkDay) continue;
+    const onFile = new Set(docRows.filter((d) => d.consultancyId === c.id).map((d) => d.category));
+    const missing = [
+      ...(c.ndaRequired && !onFile.has("NDA") ? ["NDA"] : []),
+      ...(c.ipAgreementRequired && !onFile.has("IP Agreement") ? ["IP Agreement"] : []),
+    ];
+    if (missing.length === 0) continue;
+    summary.missingDocuments.push({ consultancyId: c.id, consultancyCode: c.consultancyCode });
+    await notifyRole({
+      role: "iiic_admin",
+      consultancyId: c.id,
+      type: "missing_documents",
+      message: `${c.consultancyCode} ("${c.title}") is still missing: ${missing.join(", ")}.`,
+    });
+  }
 }

@@ -22,6 +22,10 @@ export const auditEvents = pgTable(
     oldValue: jsonb("old_value"),
     newValue: jsonb("new_value"),
     comments: text("comments"),
+    /** Portal spec §63 — the actor's role(s) when the action happened, and where it came from. */
+    actorRoles: text("actor_roles").array(),
+    requestIp: varchar("request_ip", { length: 64 }),
+    userAgent: varchar("user_agent", { length: 512 }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

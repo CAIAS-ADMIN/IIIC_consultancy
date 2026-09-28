@@ -43,7 +43,7 @@ export default async function ReportsPage() {
     db
       .select({ category: masterData.category, code: masterData.code, label: masterData.label })
       .from(masterData)
-      .where(inArray(masterData.category, ["consultancy_area", "organization_type"])),
+      .where(inArray(masterData.category, ["consultancy_area", "organization_type", "consultancy_category", "nature_of_consultancy"])),
   ]);
 
   const labelsFor = (category: string) =>
@@ -60,6 +60,8 @@ export default async function ReportsPage() {
         statuses={[...consultancyStatusEnum.enumValues]}
         areaLabels={labelsFor("consultancy_area")}
         orgTypeLabels={labelsFor("organization_type")}
+        categoryLabels={labelsFor("consultancy_category")}
+        natureLabels={labelsFor("nature_of_consultancy")}
         scopedDepartmentId={scope}
       />
     </div>

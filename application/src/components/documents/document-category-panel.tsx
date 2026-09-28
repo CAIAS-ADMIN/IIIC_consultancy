@@ -1,31 +1,24 @@
 "use client";
 
 import * as React from "react";
-import { CheckCircle2, Download, FileText, Loader2, Lock, UploadCloud } from "lucide-react";
+import { CheckCircle2, Download, Eye, FileText, Loader2, Lock, Trash2, UploadCloud } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { humanizeStatus, toneClassesFor } from "@/lib/status";
+import { ALLOWED_DOCUMENT_CONTENT_TYPES } from "@/lib/validation/documents";
 import {
-  ALLOWED_DOCUMENT_CONTENT_TYPES,
-  MAX_DOCUMENT_UPLOAD_BYTES,
-  confidentialityLevels,
-} from "@/lib/validation/documents";
+  ALLOWED_EXTENSIONS_LABEL,
+  MAX_SIZE_LABEL,
+  documentFileProblem,
+  openDocumentDownload,
+  uploadConsultancyDocument,
+} from "@/lib/documents/upload";
 import type { ConfidentialityLevel, DocumentStatus } from "@/db/schema/enums";
 
-const ALLOWED_EXTENSIONS_LABEL = "PDF, Word, Excel, JPEG, or PNG";
-const MAX_SIZE_LABEL = `${Math.floor(MAX_DOCUMENT_UPLOAD_BYTES / (1024 * 1024))}MB`;
-
-const CONFIDENTIALITY_LABELS: Record<ConfidentialityLevel, string> = {
-  public: "Public",
-  internal: "Internal",
-  confidential: "Confidential",
-  restricted: "Restricted",
-};
-
-type DocumentRow = {
+export type DocumentRow = {
   id: string;
+  documentCategory: string;
   version: number;
   originalFileName: string;
   status: DocumentStatus;
@@ -58,7 +51,6 @@ export function DocumentCategoryPanel({
   onUploadedChange?: (hasAvailableVersion: boolean) => void;
 }) {
   const [documents, setDocuments] = React.useState<DocumentRow[] | null>(null);
-  const [confidentiality, setConfidentiality] = React.useState<ConfidentialityLevel>("internal");
   const [uploading, setUploading] = React.useState(false);
   const [dragActive, setDragActive] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -95,55 +87,15 @@ export function DocumentCategoryPanel({
       setError('Save this consultancy as a draft first (use "Save Draft" below), then upload here.');
       return;
     }
-    if (!(ALLOWED_DOCUMENT_CONTENT_TYPES as readonly string[]).includes(file.type)) {
-      setError(`"${file.name}" isn't an allowed file type. Allowed: ${ALLOWED_EXTENSIONS_LABEL}.`);
-      return;
-    }
-    if (file.size > MAX_DOCUMENT_UPLOAD_BYTES) {
-      setError(`"${file.name}" is larger than the ${MAX_SIZE_LABEL} limit.`);
+    const problem = documentFileProblem(file);
+    if (problem) {
+      setError(problem);
       return;
     }
 
     setUploading(true);
     try {
-      const presignRes = await fetch("/api/documents/presign", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          consultancyId,
-          documentCategory: category,
-          originalFileName: file.name,
-          contentType: file.type,
-          fileSizeBytes: file.size,
-        }),
-      });
-      if (!presignRes.ok) {
-        const body = await presignRes.json().catch(() => ({}));
-        throw new Error(typeof body.error === "string" ? body.error : "Could not start the upload.");
-      }
-      const { data: presign } = await presignRes.json();
-
-      const putRes = await fetch(presign.uploadUrl, { method: "PUT", headers: { "content-type": file.type }, body: file });
-      if (!putRes.ok) {
-        throw new Error("The file upload failed partway through. Please try again.");
-      }
-
-      const confirmRes = await fetch("/api/documents/confirm", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          consultancyId,
-          objectKey: presign.objectKey,
-          documentCategory: category,
-          originalFileName: file.name,
-          confidentialityLevel: confidentiality,
-        }),
-      });
-      if (!confirmRes.ok) {
-        const body = await confirmRes.json().catch(() => ({}));
-        throw new Error(typeof body.error === "string" ? body.error : "Could not confirm the upload.");
-      }
-      const { data: doc } = await confirmRes.json();
+      const doc = await uploadConsultancyDocument({ consultancyId, category, file, confidentialityLevel: "internal" });
       if (doc.status === "quarantined") {
         setError("This file was flagged by the malware scan and was not accepted. Try a different file.");
       }
@@ -156,13 +108,9 @@ export function DocumentCategoryPanel({
   }
 
   async function handleDownload(documentId: string) {
-    const res = await fetch(`/api/documents/${documentId}/download`);
-    if (!res.ok) {
+    if (!(await openDocumentDownload(documentId))) {
       setError("Could not generate a download link for this file.");
-      return;
     }
-    const { data } = await res.json();
-    window.open(data.downloadUrl, "_blank", "noopener,noreferrer");
   }
 
   const current = documents?.find((d) => d.status === "available");
@@ -175,23 +123,6 @@ export function DocumentCategoryPanel({
           {label}
           {required && <span className="text-status-danger-fg"> *</span>}
         </p>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground" aria-hidden>
-            Visibility
-          </span>
-          <Select value={confidentiality} onValueChange={(v) => setConfidentiality(v as ConfidentialityLevel)}>
-            <SelectTrigger className="w-36 text-sm md:h-8 md:text-xs" aria-label={`Visibility for new ${label} uploads`}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {confidentialityLevels.map((level) => (
-                <SelectItem key={level} value={level}>
-                  {CONFIDENTIALITY_LABELS[level]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
       </div>
 
       <input
@@ -271,15 +202,21 @@ export function DocumentCategoryPanel({
   );
 }
 
-function DocumentRowView({
+export function DocumentRowView({
   doc,
   isCurrent,
   onDownload,
+  onRemove,
 }: {
   doc: DocumentRow;
   isCurrent?: boolean;
   onDownload: (id: string) => void;
+  /** When given, a Remove button (with an inline confirm) is shown. */
+  onRemove?: (id: string) => Promise<void>;
 }) {
+  const [confirming, setConfirming] = React.useState(false);
+  const [removing, setRemoving] = React.useState(false);
+
   return (
     <div className="flex items-center justify-between gap-3 rounded-md bg-background px-3 py-2">
       <div className="flex min-w-0 items-center gap-2">
@@ -301,15 +238,72 @@ function DocumentRowView({
           {doc.uploadedByName ?? "Unknown"} · {new Date(doc.uploadedAt).toLocaleDateString()}
         </span>
       </div>
-      {doc.viewerCanDownload ? (
-        <Button type="button" variant="ghost" size="icon" aria-label="Download" onClick={() => onDownload(doc.id)}>
-          <Download className="h-4 w-4" aria-hidden />
-        </Button>
-      ) : (
-        <span title="You don't have permission to download this file" className="flex h-10 w-10 items-center justify-center text-muted-foreground">
-          <Lock className="h-4 w-4" aria-hidden />
-        </span>
-      )}
+      <div className="flex shrink-0 items-center gap-1">
+        {confirming ? (
+          <>
+            <span className="text-xs text-muted-foreground">Remove?</span>
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              disabled={removing}
+              onClick={async () => {
+                setRemoving(true);
+                try {
+                  await onRemove?.(doc.id);
+                } finally {
+                  setRemoving(false);
+                  setConfirming(false);
+                }
+              }}
+            >
+              {removing ? "Removing…" : "Remove"}
+            </Button>
+            <Button type="button" variant="ghost" size="sm" disabled={removing} onClick={() => setConfirming(false)}>
+              Cancel
+            </Button>
+          </>
+        ) : (
+          <>
+            {doc.viewerCanDownload ? (
+              <>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="gap-1.5"
+                  aria-label={`View ${doc.originalFileName}`}
+                  onClick={async () => {
+                    if (!(await openDocumentDownload(doc.id, { inline: true }))) onDownload(doc.id);
+                  }}
+                >
+                  <Eye className="h-4 w-4" aria-hidden />
+                  <span className="hidden sm:inline">View</span>
+                </Button>
+                <Button type="button" variant="ghost" size="icon" aria-label={`Download ${doc.originalFileName}`} onClick={() => onDownload(doc.id)}>
+                  <Download className="h-4 w-4" aria-hidden />
+                </Button>
+              </>
+            ) : (
+              <span title="You don't have permission to download this file" className="flex h-10 w-10 items-center justify-center text-muted-foreground">
+                <Lock className="h-4 w-4" aria-hidden />
+              </span>
+            )}
+            {onRemove && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label={`Remove ${doc.originalFileName}`}
+                className="text-status-danger-fg"
+                onClick={() => setConfirming(true)}
+              >
+                <Trash2 className="h-4 w-4" aria-hidden />
+              </Button>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }

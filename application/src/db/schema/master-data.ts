@@ -45,6 +45,12 @@ export const approvalStageConfigs = pgTable("approval_stage_configs", {
   id: uuid("id").primaryKey().defaultRandom(),
   departmentId: uuid("department_id").references(() => departments.id, { onDelete: "cascade" }),
   consultancyAreaCode: varchar("consultancy_area_code", { length: 100 }),
+  /** Section 50 — limit a stage to one consultancy category (null = any). */
+  consultancyCategoryCode: varchar("consultancy_category_code", { length: 100 }),
+  /** true = stage applies only when CAIAS resources are used (null = regardless). */
+  whenResourcesUsed: boolean("when_resources_used"),
+  /** true = stage applies only when IP is expected or confidential information is involved (null = regardless). */
+  whenIpOrConfidential: boolean("when_ip_or_confidential"),
   minValue: numeric("min_value", { precision: 14, scale: 2 }),
   maxValue: numeric("max_value", { precision: 14, scale: 2 }),
   stage: varchar("stage", { length: 100 }).notNull(),

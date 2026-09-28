@@ -17,6 +17,18 @@ export const SEARCH_FILTER_KEYS = [
   "ipInvolvement",
   "resourceUsage",
   "paymentStatus",
+  // Portal spec §62 additions
+  "clientTypeCode",
+  "consultancyCategoryCode",
+  "startFrom",
+  "startTo",
+  "completionFrom",
+  "completionTo",
+  "agreementReference",
+  /** "include" | "only" — archived records are left out unless asked for (spec §68). */
+  "archived",
+  /** A named KPI view — see search-presets.ts. */
+  "preset",
 ] as const;
 
 export type SearchFilterKey = (typeof SEARCH_FILTER_KEYS)[number];

@@ -2,7 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { approvals, documents } from "@/db/schema";
 import { getAgreementByConsultancyId } from "@/db/queries/consultancies";
-import { resolveApprovalChain } from "./approval-chain";
+import { resolveApprovalChain, approvalChainInputFor } from "./approval-chain";
 import type { getConsultancyById } from "@/db/queries/consultancies";
 
 type ConsultancyRow = NonNullable<Awaited<ReturnType<typeof getConsultancyById>>>;
@@ -52,11 +52,7 @@ export async function checkActivationGates(consultancy: ConsultancyRow): Promise
     reasons.push("Expected completion date is missing");
   }
 
-  const chain = await resolveApprovalChain(db, {
-    departmentId: consultancy.departmentId,
-    consultancyAreaCode: consultancy.consultancyAreaCode,
-    totalValue: consultancy.totalValue,
-  });
+  const chain = await resolveApprovalChain(db, approvalChainInputFor(consultancy));
   if (chain.length > 0) {
     const verifyRows = await db.query.approvals.findMany({
       where: and(eq(approvals.consultancyId, consultancy.id), eq(approvals.decision, "verify")),

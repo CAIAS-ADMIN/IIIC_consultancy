@@ -16,6 +16,10 @@ export const progressUpdates = pgTable(
     status: progressStatusEnum("status").notNull(),
     workCompleted: text("work_completed"),
     workInProgress: text("work_in_progress"),
+    pendingActivities: text("pending_activities"),
+    challenges: text("challenges"),
+    correctiveAction: text("corrective_action"),
+    nextPlannedActivity: text("next_planned_activity"),
     overallProgressPercent: integer("overall_progress_percent").notNull(),
     createdBy: uuid("created_by")
       .notNull()

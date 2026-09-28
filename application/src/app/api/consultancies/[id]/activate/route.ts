@@ -7,7 +7,7 @@ import { consultancies } from "@/db/schema";
 import { getConsultancyById } from "@/db/queries/consultancies";
 import { checkActivationGates } from "@/lib/consultancy/activation";
 import { recordAuditEvent } from "@/lib/audit";
-import { notifyUser } from "@/lib/notifications";
+import { notifyUser, notifyRole } from "@/lib/notifications";
 
 /**
  * activateConsultancy — iiic_admin/system_admin only (the central admin
@@ -56,10 +56,20 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
 
     await notifyUser(
       {
-        userId: updated.createdBy,
+        userId: updated.facultyInChargeId,
         consultancyId: id,
         type: "activated",
         message: `Consultancy ${updated.consultancyCode} ("${updated.title}") is now active.`,
+      },
+      tx
+    );
+    await notifyRole(
+      {
+        role: "hod",
+        departmentId: updated.departmentId,
+        consultancyId: id,
+        type: "activated",
+        message: `Consultancy ${updated.consultancyCode} ("${updated.title}") in your department is now active.`,
       },
       tx
     );

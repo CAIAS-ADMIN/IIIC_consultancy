@@ -1,7 +1,7 @@
 import NextAuth from "next-auth";
 import Keycloak from "next-auth/providers/keycloak";
 import { env } from "@/lib/env";
-import { syncUserFromClaims } from "@/db/queries/users";
+import { syncUserFromClaims, userExists } from "@/db/queries/users";
 import type { Role } from "@/db/schema/enums";
 
 const VALID_ROLES: readonly Role[] = [
@@ -32,6 +32,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   // single working day) — re-issued on activity via the default `updateAge`.
   session: { strategy: "jwt", maxAge: 8 * 60 * 60 },
   jwt: { maxAge: 8 * 60 * 60 },
+  // proxy.ts sends signed-out/expired navigation to /api/auth/signin; this
+  // makes Auth.js forward that on to the branded landing page (with the
+  // original callbackUrl) instead of rendering its own unstyled page.
+  pages: { signIn: "/" },
   secret: env.NEXTAUTH_SECRET,
   trustHost: true,
   callbacks: {
@@ -46,11 +50,17 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           roles,
           employeeId: (profile.employee_id as string) ?? null,
           phone: (profile.phone as string) ?? null,
+          department: (profile.department as string) ?? null,
         });
 
         token.userId = localUser.id;
         token.roles = localUser.roles;
         token.departmentId = localUser.departmentId;
+      } else if (token.userId && !(await userExists(token.userId))) {
+        // The account behind this session was removed (e.g. a data cleanup):
+        // end the session instead of letting writes fail on a missing user.
+        // Signing in again re-creates the account from the Keycloak claims.
+        return null;
       }
       return token;
     },

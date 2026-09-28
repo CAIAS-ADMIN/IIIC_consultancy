@@ -16,8 +16,15 @@ export const milestones = pgTable(
       onDelete: "set null",
     }),
     title: varchar("title", { length: 255 }).notNull(),
+    description: text("description"),
+    /** Planned start (portal spec v2 Screen 9). `plannedDate` is the expected completion. */
+    startDate: date("start_date"),
     plannedDate: date("planned_date").notNull(),
+    actualStartDate: date("actual_start_date"),
+    /** Actual completion. */
     actualDate: date("actual_date"),
+    /** Free-text responsible person for milestones planned at registration, when they aren't a portal user. */
+    responsiblePerson: varchar("responsible_person", { length: 255 }),
     status: milestoneStatusEnum("status").notNull().default("not_started"),
     responsibleConsultantId: uuid("responsible_consultant_id").references(() => users.id, {
       onDelete: "set null",

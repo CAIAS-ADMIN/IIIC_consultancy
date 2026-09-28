@@ -5,14 +5,15 @@ import { authErrorResponse } from "@/lib/auth/errors";
 import { db } from "@/db";
 import { progressUpdates, documents } from "@/db/schema";
 import { getConsultancyById } from "@/db/queries/consultancies";
-import { isConsultancyMember } from "@/lib/consultancy/access";
+import { isConsultancyMember, canViewConsultancy } from "@/lib/consultancy/access";
 import { addProgressUpdateSchema } from "@/lib/validation/progress";
 import { recordAuditEvent } from "@/lib/audit";
 
 /** GET — status/progress-% history, chronological by report date. */
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  let viewer;
   try {
-    await requireSession();
+    viewer = await requireSession();
   } catch (error) {
     return authErrorResponse(error);
   }
@@ -20,6 +21,9 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const { id } = await params;
   const consultancy = await getConsultancyById(id);
   if (!consultancy) {
+    return Response.json({ error: "Not found" }, { status: 404 });
+  }
+  if (!(await canViewConsultancy(viewer, consultancy))) {
     return Response.json({ error: "Not found" }, { status: 404 });
   }
 
@@ -80,6 +84,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         status: input.status,
         workCompleted: input.workCompleted,
         workInProgress: input.workInProgress,
+        pendingActivities: input.pendingActivities,
+        challenges: input.challenges,
+        correctiveAction: input.correctiveAction,
+        nextPlannedActivity: input.nextPlannedActivity,
         overallProgressPercent: input.overallProgressPercent,
         createdBy: user.id,
       })

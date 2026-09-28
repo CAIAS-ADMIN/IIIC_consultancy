@@ -8,13 +8,13 @@ import { Button } from "@/components/ui/button";
  * doesn't require a <SessionProvider> ancestor (only *reading* the session
  * via useSession() does), so this button needs nothing else wired up.
  */
-export function SignInButton() {
+export function SignInButton({ callbackUrl = "/dashboard" }: { callbackUrl?: string }) {
   return (
     <Button
       type="button"
       size="lg"
       className="w-full"
-      onClick={() => signIn("keycloak", { callbackUrl: "/dashboard" })}
+      onClick={() => signIn("keycloak", { callbackUrl })}
     >
       Sign in with Google
     </Button>

@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { canViewConsultancy } from "@/lib/consultancy/access";
 import { asc, eq } from "drizzle-orm";
 import { requireRole, requireSession } from "@/lib/auth/requireRole";
 import { authErrorResponse } from "@/lib/auth/errors";
@@ -8,11 +9,13 @@ import { getConsultancyById } from "@/db/queries/consultancies";
 import { checkOverpaymentCeiling } from "@/lib/consultancy/financials";
 import { recordPaymentTransactionSchema } from "@/lib/validation/payments";
 import { recordAuditEvent } from "@/lib/audit";
+import { notifyUser } from "@/lib/notifications";
 
 /** Faculty-facing read: actual received amounts (view-only, no write path exists for non-finance roles). */
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  let viewer;
   try {
-    await requireSession();
+    viewer = await requireSession();
   } catch (error) {
     return authErrorResponse(error);
   }
@@ -20,6 +23,9 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const { id } = await params;
   const consultancy = await getConsultancyById(id);
   if (!consultancy) {
+    return Response.json({ error: "Not found" }, { status: 404 });
+  }
+  if (!(await canViewConsultancy(viewer, consultancy))) {
     return Response.json({ error: "Not found" }, { status: 404 });
   }
 
@@ -73,6 +79,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           action: "payment_transaction_recorded",
           actorId: user.id,
           newValue: { amount: row.amount, transactionRef: row.transactionRef },
+        },
+        tx
+      );
+
+      await notifyUser(
+        {
+          userId: consultancy.facultyInChargeId,
+          consultancyId: id,
+          type: "payment_recorded",
+          message: `Finance recorded a payment of ${Number(row.amount).toFixed(2)} on ${consultancy.consultancyCode} (${row.transactionDate}).`,
         },
         tx
       );

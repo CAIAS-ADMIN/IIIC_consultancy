@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { FINAL_OUTCOME_OPTIONS, RATING_LABELS } from "@/lib/validation/closure";
 import Link from "next/link";
 import { FileSpreadsheet, FileText, Eye, SearchX } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -19,7 +20,7 @@ import { formatInr, formatInrCompact } from "@/lib/format";
 export type DepartmentItem = { id: string; name: string; code: string };
 
 type CountRow = { key: string; count: number };
-type MoneyRow = { key: string; totalValue: number; totalReceived: number; amountPending: number };
+type MoneyRow = { key: string; totalValue: number; totalReceived: number; amountPending: number; tds?: number };
 
 export type SummaryReportData = {
   byStatus: CountRow[];
@@ -27,11 +28,18 @@ export type SummaryReportData = {
   byAcademicYear: CountRow[];
   byClientType: CountRow[];
   byCategory: CountRow[];
+  byFaculty: CountRow[];
+  byConsultancyCategory: CountRow[];
+  byNature: CountRow[];
+  byOutcome: CountRow[];
+  satisfaction: { byRating: CountRow[]; average: number | null; responses: number };
+  highlights: { completed: number; ipGenerated: number; resourceIntensive: number; multidisciplinary: number };
 };
 
 export type FinancialReportData = {
   byDepartment: MoneyRow[];
   byAcademicYear: MoneyRow[];
+  overduePayments: number;
 };
 
 type SearchResultRow = {
@@ -87,6 +95,8 @@ export function ReportsHub({
   statuses,
   areaLabels,
   orgTypeLabels,
+  categoryLabels = {},
+  natureLabels = {},
   scopedDepartmentId,
 }: {
   summaryData: SummaryReportData;
@@ -96,6 +106,8 @@ export function ReportsHub({
   statuses: string[];
   areaLabels: Record<string, string>;
   orgTypeLabels: Record<string, string>;
+  categoryLabels?: Record<string, string>;
+  natureLabels?: Record<string, string>;
   /** `undefined` = unrestricted; a department id = locked to it; `null` = faculty with no department on record. */
   scopedDepartmentId: string | null | undefined;
 }) {
@@ -212,6 +224,9 @@ export function ReportsHub({
   const totalValue = financialData.byDepartment.reduce((acc, d) => acc + d.totalValue, 0);
   const totalReceived = financialData.byDepartment.reduce((acc, d) => acc + d.totalReceived, 0);
   const totalPending = financialData.byDepartment.reduce((acc, d) => acc + d.amountPending, 0);
+  const totalTds = financialData.byDepartment.reduce((acc, d) => acc + (d.tds ?? 0), 0);
+  const labelOr = (labels: Record<string, string>) => (key: string) => (key === "unspecified" ? "Not specified" : (labels[key] ?? key));
+  const outcomeLabel = (key: string) => FINAL_OUTCOME_OPTIONS.find((o) => o.code === key)?.label ?? "Not specified";
 
   const searchColumns: DataTableColumn<SearchResultRow>[] = [
     { header: "Consultancy ID", cell: (r) => <span className="font-mono text-xs">{r.consultancyCode ?? "Draft"}</span>, primary: true },
@@ -291,7 +306,38 @@ export function ReportsHub({
                 <CountTable title="By Department" rows={summaryData.byDepartment} labelFor={deptName} />
                 <CountTable title="By Academic Year" rows={summaryData.byAcademicYear} labelFor={(k) => `AY ${k}`} />
                 <CountTable title="By Client Type" rows={summaryData.byClientType} labelFor={orgTypeLabel} />
-                <CountTable title="By Category" rows={summaryData.byCategory} labelFor={areaLabel} />
+                <CountTable title="By Consultancy Area" rows={summaryData.byCategory} labelFor={areaLabel} />
+                <CountTable title="By Consultancy Category" rows={summaryData.byConsultancyCategory} labelFor={labelOr(categoryLabels)} />
+                <CountTable title="By Nature of Consultancy" rows={summaryData.byNature} labelFor={labelOr(natureLabels)} />
+                <CountTable title="By Faculty" rows={summaryData.byFaculty} labelFor={(k) => k} />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base font-semibold">Outcomes</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-6">
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+                <StatTile size="sm" label="Completed" value={summaryData.highlights.completed} />
+                <StatTile size="sm" label="IP-generating" value={summaryData.highlights.ipGenerated} />
+                <StatTile size="sm" label="Resource-intensive" value={summaryData.highlights.resourceIntensive} />
+                <StatTile size="sm" label="Multidisciplinary" value={summaryData.highlights.multidisciplinary} />
+                <StatTile
+                  size="sm"
+                  label={`Client Satisfaction (${summaryData.satisfaction.responses})`}
+                  value={summaryData.satisfaction.average === null ? "—" : `${summaryData.satisfaction.average}/5`}
+                  tone="primary"
+                />
+              </div>
+              <div className="grid gap-6 md:grid-cols-2">
+                <CountTable title="Final Outcome (closed records)" rows={summaryData.byOutcome} labelFor={outcomeLabel} />
+                <CountTable
+                  title="Client Satisfaction Ratings"
+                  rows={summaryData.satisfaction.byRating}
+                  labelFor={(k) => `${k} — ${RATING_LABELS[Number(k)] ?? ""}`}
+                />
               </div>
             </CardContent>
           </Card>
@@ -300,10 +346,12 @@ export function ReportsHub({
 
       {activeTab === "financials" && (
         <div className="flex flex-col gap-6">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
             <StatTile label="Total Value Signed" value={formatInrCompact(totalValue)} tone="primary" />
             <StatTile label="Total Received" value={formatInrCompact(totalReceived)} />
             <StatTile label="Total Pending" value={formatInrCompact(totalPending)} tone="accent" />
+            <StatTile label="Payments Overdue" value={financialData.overduePayments} tone={financialData.overduePayments > 0 ? "danger" : "neutral"} />
+            <StatTile label="TDS Deducted" value={formatInrCompact(totalTds)} />
           </div>
 
           <div className="grid gap-6 md:grid-cols-2">
@@ -337,6 +385,8 @@ export function ReportsHub({
             departments={departments}
             faculty={faculty}
             statuses={statuses}
+            clientTypes={Object.entries(orgTypeLabels).map(([value, label]) => ({ value, label }))}
+            categories={Object.entries(categoryLabels).map(([value, label]) => ({ value, label }))}
             isDepartmentLocked={isDepartmentLocked}
           />
 
@@ -433,6 +483,7 @@ function FinancialTable({ rows, labelFor }: { rows: MoneyRow[]; labelFor: (key: 
             <th className="p-3 text-right font-medium">Value</th>
             <th className="p-3 text-right font-medium">Received</th>
             <th className="p-3 text-right font-medium">Pending</th>
+            <th className="p-3 text-right font-medium">TDS</th>
             <th className="p-3 text-right font-medium">Realized</th>
           </tr>
         </thead>
@@ -443,6 +494,7 @@ function FinancialTable({ rows, labelFor }: { rows: MoneyRow[]; labelFor: (key: 
               <td className="p-3 text-right font-mono">{formatInr(r.totalValue)}</td>
               <td className="p-3 text-right font-mono text-status-success-fg">{formatInr(r.totalReceived)}</td>
               <td className="p-3 text-right font-mono text-status-warning-fg">{formatInr(r.amountPending)}</td>
+              <td className="p-3 text-right font-mono">{formatInr(r.tds ?? 0)}</td>
               <td className="p-3 text-right font-semibold">{r.totalValue > 0 ? Math.round((r.totalReceived / r.totalValue) * 100) : 0}%</td>
             </tr>
           ))}
@@ -460,6 +512,8 @@ function FinancialTable({ rows, labelFor }: { rows: MoneyRow[]; labelFor: (key: 
               <dd className="text-right font-mono text-status-success-fg">{formatInr(r.totalReceived)}</dd>
               <dt className="text-muted-foreground">Pending</dt>
               <dd className="text-right font-mono text-status-warning-fg">{formatInr(r.amountPending)}</dd>
+              <dt className="text-muted-foreground">TDS</dt>
+              <dd className="text-right font-mono">{formatInr(r.tds ?? 0)}</dd>
               <dt className="text-muted-foreground">Realized</dt>
               <dd className="text-right font-semibold">{r.totalValue > 0 ? Math.round((r.totalReceived / r.totalValue) * 100) : 0}%</dd>
             </dl>

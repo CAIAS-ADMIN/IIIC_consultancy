@@ -1,18 +1,19 @@
 import type { NextRequest } from "next/server";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { requireSession } from "@/lib/auth/requireRole";
 import { authErrorResponse } from "@/lib/auth/errors";
 import { db } from "@/db";
-import { closures, consultancies, documents } from "@/db/schema";
+import { closures, consultancies, deliverables, documents } from "@/db/schema";
 import { getConsultancyById } from "@/db/queries/consultancies";
-import { isConsultancyMember } from "@/lib/consultancy/access";
+import { isConsultancyMember, canViewConsultancy } from "@/lib/consultancy/access";
 import { requestClosureSchema } from "@/lib/validation/closure";
 import { recordAuditEvent } from "@/lib/audit";
 import { notifyRole } from "@/lib/notifications";
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  let viewer;
   try {
-    await requireSession();
+    viewer = await requireSession();
   } catch (error) {
     return authErrorResponse(error);
   }
@@ -20,6 +21,9 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const { id } = await params;
   const consultancy = await getConsultancyById(id);
   if (!consultancy) {
+    return Response.json({ error: "Not found" }, { status: 404 });
+  }
+  if (!(await canViewConsultancy(viewer, consultancy))) {
     return Response.json({ error: "Not found" }, { status: 404 });
   }
 
@@ -67,6 +71,28 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return Response.json({ error: "Final report document is missing or not available — upload it before requesting closure" }, { status: 400 });
   }
 
+  // Per-deliverable results must reference this consultancy's own deliverables / documents.
+  const outcomeDeliverableIds = input.deliverableOutcomes.map((d) => d.deliverableId);
+  if (outcomeDeliverableIds.length > 0) {
+    const own = await db
+      .select({ id: deliverables.id })
+      .from(deliverables)
+      .where(and(eq(deliverables.consultancyId, id), inArray(deliverables.id, outcomeDeliverableIds)));
+    if (own.length !== new Set(outcomeDeliverableIds).size) {
+      return Response.json({ error: "Deliverable results must refer to this consultancy's deliverables" }, { status: 400 });
+    }
+  }
+  const evidenceIds = input.deliverableOutcomes.map((d) => d.evidenceDocumentId).filter((v): v is string => Boolean(v));
+  if (evidenceIds.length > 0) {
+    const ownDocs = await db
+      .select({ id: documents.id })
+      .from(documents)
+      .where(and(eq(documents.consultancyId, id), inArray(documents.id, evidenceIds)));
+    if (ownDocs.length !== new Set(evidenceIds).size) {
+      return Response.json({ error: "Evidence documents must belong to this consultancy" }, { status: 400 });
+    }
+  }
+
   const result = await db.transaction(async (tx) => {
     const [created] = await tx
       .insert(closures)
@@ -78,8 +104,25 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         partialReason: input.partialReason,
         finalOutcomes: input.finalOutcomes,
         finalReportDocumentId: input.finalReportDocumentId,
+        finalProgressPercent: input.finalProgressPercent,
+        finalOutcome: input.finalOutcome,
+        outcomeReason: input.outcomeReason,
+        deliverableOutcomes: input.deliverableOutcomes,
+        fullPaymentReceived: input.fullPaymentReceived,
+        amountPending: input.fullPaymentReceived ? null : input.amountPending,
+        pendingReason: input.fullPaymentReceived ? null : input.pendingReason,
+        expectedPaymentDate: input.fullPaymentReceived ? null : input.expectedPaymentDate,
+        declarationAcceptedAt: new Date(),
       })
       .returning();
+
+    // Deliverable statuses follow the consultant's closure statement.
+    for (const outcome of input.deliverableOutcomes) {
+      await tx
+        .update(deliverables)
+        .set({ status: outcome.completed === "yes" ? "completed" : outcome.completed === "partially" ? "in_progress" : "cancelled", updatedAt: new Date() })
+        .where(eq(deliverables.id, outcome.deliverableId));
+    }
 
     await tx.update(consultancies).set({ status: "closure_requested", updatedAt: new Date() }).where(eq(consultancies.id, id));
 
@@ -90,7 +133,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         entityId: created.id,
         action: "closure_requested",
         actorId: user.id,
-        newValue: { deliverableCompletionStatus: created.deliverableCompletionStatus },
+        newValue: {
+          deliverableCompletionStatus: created.deliverableCompletionStatus,
+          finalOutcome: created.finalOutcome,
+          fullPaymentReceived: created.fullPaymentReceived,
+        },
       },
       tx
     );
@@ -101,6 +148,27 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         consultancyId: id,
         type: "closure_review_pending",
         message: `Consultancy ${consultancy.consultancyCode} ("${consultancy.title}") has requested closure and needs review.`,
+      },
+      tx
+    );
+
+    await notifyRole(
+      {
+        role: "hod",
+        departmentId: consultancy.departmentId,
+        consultancyId: id,
+        type: "closure_submitted",
+        message: `Closure was submitted for consultancy ${consultancy.consultancyCode} ("${consultancy.title}").`,
+      },
+      tx
+    );
+
+    await notifyRole(
+      {
+        role: "finance",
+        consultancyId: id,
+        type: "financial_closure_pending",
+        message: `Consultancy ${consultancy.consultancyCode} ("${consultancy.title}") has requested closure — please confirm its financial position.`,
       },
       tx
     );

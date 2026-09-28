@@ -5,13 +5,15 @@ import { authErrorResponse } from "@/lib/auth/errors";
 import { db } from "@/db";
 import { extensions, consultancies, documents } from "@/db/schema";
 import { getConsultancyById } from "@/db/queries/consultancies";
-import { isConsultancyMember } from "@/lib/consultancy/access";
+import { isConsultancyMember, canViewConsultancy } from "@/lib/consultancy/access";
 import { requestExtensionSchema } from "@/lib/validation/lifecycle";
 import { recordAuditEvent } from "@/lib/audit";
+import { notifyRole } from "@/lib/notifications";
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  let viewer;
   try {
-    await requireSession();
+    viewer = await requireSession();
   } catch (error) {
     return authErrorResponse(error);
   }
@@ -19,6 +21,9 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const { id } = await params;
   const consultancy = await getConsultancyById(id);
   if (!consultancy) {
+    return Response.json({ error: "Not found" }, { status: 404 });
+  }
+  if (!(await canViewConsultancy(viewer, consultancy))) {
     return Response.json({ error: "Not found" }, { status: 404 });
   }
 
@@ -105,6 +110,20 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       },
       tx
     );
+
+    // Spec §60: extension requests go to CAIAS admin (and the department's HOD).
+    for (const role of ["iiic_admin", "hod"] as const) {
+      await notifyRole(
+        {
+          role,
+          departmentId: consultancy.departmentId,
+          consultancyId: id,
+          type: "extension_requested",
+          message: `Extension requested on ${consultancy.consultancyCode}: ${consultancy.currentCompletionDate} → ${created.proposedCompletionDate}.`,
+        },
+        tx
+      );
+    }
 
     return created;
   });

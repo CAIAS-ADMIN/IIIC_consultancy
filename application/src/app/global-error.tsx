@@ -1,23 +1,26 @@
 "use client";
 
+import "./globals.css";
+
 /**
  * Last-resort boundary for errors in the root layout itself. It replaces the
- * whole document, so global CSS isn't available — styles are inline and
- * mirror the app's tokens (cream background, brand green).
+ * whole document (so the root layout's stylesheet import doesn't apply) —
+ * it imports globals.css itself to keep using the design tokens.
  */
 export default function GlobalError({ error, retry }: { error: Error & { digest?: string }; retry: () => void }) {
   return (
     <html lang="en">
-      <body style={{ margin: 0, minHeight: "100dvh", display: "grid", placeItems: "center", background: "#f7f6f1", color: "#1a1f1a", fontFamily: "system-ui, sans-serif", padding: 16 }}>
-        <main style={{ maxWidth: 420, textAlign: "center" }}>
-          <h1 style={{ fontSize: 20, margin: "0 0 8px" }}>Something went wrong</h1>
-          <p style={{ color: "#6b7075", margin: "0 0 20px", fontSize: 15 }}>
+      <body className="m-0 grid min-h-dvh place-items-center bg-background p-4 text-foreground">
+        <main className="max-w-[420px] text-center">
+          <h1 className="mb-2 text-xl font-bold">Something went wrong</h1>
+          <p className="mb-5 text-[15px] text-muted-foreground">
             The portal couldn&apos;t load. Please try again.
             {error.digest ? ` Reference: ${error.digest}` : ""}
           </p>
           <button
+            type="button"
             onClick={() => retry()}
-            style={{ minHeight: 44, padding: "0 20px", border: 0, borderRadius: 6, background: "#2e7d32", color: "#fff", fontSize: 15, cursor: "pointer" }}
+            className="min-h-11 cursor-pointer rounded-sm bg-primary px-5 text-[15px] text-primary-foreground hover:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
           >
             Try again
           </button>

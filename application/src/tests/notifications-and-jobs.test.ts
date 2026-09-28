@@ -2,7 +2,7 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { and, eq } from "drizzle-orm";
 import { createTestSessionCookie } from "./helpers/session";
-import { upsertTestUser, upsertTestDepartment, upsertTestApprovalStageConfig, BASE_URL } from "./helpers/fixtures";
+import { upsertTestUser, upsertTestDepartment, upsertTestApprovalStageConfig, BASE_URL, withRegistrationDefaults, withClosureDefaults, financeVerifyClosure } from "./helpers/fixtures";
 import { closeDb, db } from "@/db";
 import { documents, notifications } from "@/db/schema";
 
@@ -42,7 +42,7 @@ before(async () => {
     departmentId,
   });
   hodId = hod.id;
-  hodCookie = await createTestSessionCookie({ userId: hod.id, roles: ["hod"] });
+  hodCookie = await createTestSessionCookie({ userId: hod.id, roles: ["hod"], departmentId });
 
   const iiicAdmin = await upsertTestUser({
     keycloakSub: "test-iiicadmin-phase11",
@@ -73,7 +73,7 @@ function addDays(base: Date, days: number): Date {
 }
 
 function validSubmitPayload(completionDate: string, overrides: Record<string, unknown> = {}) {
-  return {
+  return withRegistrationDefaults({
     consultancy: {
       departmentId,
       academicYearCode: "2025-26",
@@ -91,7 +91,7 @@ function validSubmitPayload(completionDate: string, overrides: Record<string, un
     scope: { scopeOfWork: "Build a test integration.", deliverables: [{ description: "Final report" }] },
     resources: {},
     ...overrides,
-  };
+  });
 }
 
 async function createDraft(title = "Phase 11 Test Consultancy") {
@@ -273,12 +273,12 @@ test("each workflow action produces the correct notification row(s) for the corr
   const closureRes = await fetch(`${BASE_URL}/api/consultancies/${submitted.id}/closures`, {
     method: "POST",
     headers: { cookie: facultyCookie, "content-type": "application/json" },
-    body: JSON.stringify({
+    body: JSON.stringify(withClosureDefaults({
       actualCompletionDate: "2026-11-01",
       deliverableCompletionStatus: "yes",
       finalOutcomes: "Done.",
       finalReportDocumentId: finalReport.id,
-    }),
+    })),
   });
   assert.equal(closureRes.status, 201);
   const closure = (await closureRes.json()).data;
@@ -305,6 +305,8 @@ test("each workflow action produces the correct notification row(s) for the corr
       transactionRef: "TXN-NOTIF",
     }),
   });
+
+  await financeVerifyClosure(submitted.id, closure.id);
 
   const verifyClosureRes = await fetch(`${BASE_URL}/api/consultancies/${submitted.id}/closures/${closure.id}/verify`, {
     method: "POST",
@@ -370,4 +372,26 @@ test("GET/PATCH /api/notifications: a user sees only their own rows, unreadCount
   const listAfterBody = await listAfter.json();
   const readRow = listAfterBody.data.find((n: { id: string }) => n.id === row.id);
   assert.equal(readRow.isRead, true);
+});
+
+test("GET /api/notifications pages with limit/offset, reports hasMore, and keeps unreadCount across pages", async () => {
+  await db.insert(notifications).values(
+    Array.from({ length: 3 }, (_, i) => ({ userId: facultyId, type: "test_notification", message: `Paging test ${i}` }))
+  );
+
+  const all = await (await fetch(`${BASE_URL}/api/notifications?limit=50`, { headers: { cookie: facultyCookie } })).json();
+  const first = await (await fetch(`${BASE_URL}/api/notifications?limit=2&offset=0`, { headers: { cookie: facultyCookie } })).json();
+  const second = await (await fetch(`${BASE_URL}/api/notifications?limit=2&offset=2`, { headers: { cookie: facultyCookie } })).json();
+
+  assert.equal(first.data.length, 2);
+  assert.equal(first.hasMore, true);
+  assert.deepEqual(
+    [...first.data, ...second.data].map((n: { id: string }) => n.id),
+    all.data.slice(0, first.data.length + second.data.length).map((n: { id: string }) => n.id)
+  );
+  assert.equal(first.unreadCount, all.unreadCount);
+  assert.equal(second.unreadCount, all.unreadCount);
+
+  const unauthenticated = await fetch(`${BASE_URL}/api/notifications`);
+  assert.equal(unauthenticated.status, 401);
 });

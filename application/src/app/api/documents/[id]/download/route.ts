@@ -10,8 +10,8 @@ import { documentsBucket, s3Client } from "@/lib/storage/rustfs";
 
 const DOWNLOAD_URL_EXPIRY_SECONDS = 300;
 
-/** GET /api/documents/:id/download — a presigned GET URL, gated on the document's confidentiality level. */
-export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+/** GET /api/documents/:id/download[?inline=1] — a presigned GET URL, gated on the document's confidentiality level. */
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   let user;
   try {
     user = await requireSession();
@@ -40,7 +40,8 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     new GetObjectCommand({
       Bucket: documentsBucket,
       Key: document.objectKey,
-      ResponseContentDisposition: `attachment; filename="${document.originalFileName.replace(/"/g, "")}"`,
+      // `?inline=1` opens the file in the browser (View); the default downloads it.
+      ResponseContentDisposition: `${request.nextUrl.searchParams.get("inline") === "1" ? "inline" : "attachment"}; filename="${document.originalFileName.replace(/"/g, "")}"`,
     }),
     { expiresIn: DOWNLOAD_URL_EXPIRY_SECONDS }
   );

@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { isOversightRole } from "@/components/shell/nav-config";
 import { AdminOverview } from "@/components/overview/admin-overview";
 import { resolveDepartmentParam } from "@/db/queries/departments-param";
+import { canViewAllDepartments, effectiveDepartmentFilter } from "@/lib/consultancy/scope";
 import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import { StatTile } from "@/components/ui/stat-tile";
@@ -78,6 +79,13 @@ async function FacultyDashboard({ facultyId }: { facultyId: string }) {
   const completedThisYear = rows.filter(
     (r) => r.status === "completed_closed" && r.academicYearCode === currentAcademicYear
   ).length;
+  const count = (status: ConsultancyStatus) => rows.filter((r) => r.status === status).length;
+  const today = new Date().toISOString().slice(0, 10);
+  // Same definitions as the `closure_due` / `pending_actions` list presets the tiles link to.
+  const closureDue = rows.filter(
+    (r) => (r.status === "active" || r.status === "delayed") && r.currentCompletionDate !== null && r.currentCompletionDate <= today
+  ).length;
+  const pendingActions = count("draft") + count("clarification_required") + closureDue;
   const totalValue = rows
     .filter((r) => r.status !== "draft")
     .reduce((sum, r) => sum + Number(r.totalValue ?? 0), 0);
@@ -91,11 +99,37 @@ async function FacultyDashboard({ facultyId }: { facultyId: string }) {
       />
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <StatTile label="Active" value={active} />
-        <StatTile label="Pending Verification" value={pendingVerification} tone="accent" />
-        <StatTile label="Completed This Year" value={completedThisYear} />
+        <StatTile label="Active" value={active} href="/consultancies?status=active" />
+        <StatTile label="Pending Verification" value={pendingVerification} tone="accent" href="/consultancies?preset=pending_verification" />
+        <StatTile label="Completed This Year" value={completedThisYear} href="/consultancies?status=completed_closed" />
         <StatTile label="Total Value" value={formatInrCompact(totalValue)} tone="primary" />
       </div>
+
+      {/* Portal spec §67 faculty KPIs — each drills down to the matching list. */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
+        <StatTile size="sm" label="Draft" value={count("draft")} href="/consultancies?status=draft" />
+        <StatTile size="sm" label="Submitted" value={count("submitted")} href="/consultancies?status=submitted" />
+        <StatTile size="sm" label="Active" value={active} href="/consultancies?status=active" />
+        <StatTile size="sm" label="Delayed" value={count("delayed")} tone={count("delayed") > 0 ? "danger" : "neutral"} href="/consultancies?status=delayed" />
+        <StatTile size="sm" label="Closure Due" value={closureDue} tone={closureDue > 0 ? "accent" : "neutral"} href="/consultancies?preset=closure_due" />
+        <StatTile size="sm" label="Closed" value={count("completed_closed")} href="/consultancies?status=completed_closed" />
+        <StatTile size="sm" label="Pending Actions" value={pendingActions} tone={pendingActions > 0 ? "accent" : "neutral"} href="/consultancies?preset=pending_actions" />
+      </div>
+
+      <nav aria-label="Quick links" className="flex flex-wrap gap-2">
+        {[
+          ["My Consultancy Records", "/consultancies"],
+          ["Pending Actions", "/consultancies?preset=pending_actions"],
+          ["Progress Updates", "/consultancies?status=active"],
+          ["Closure", "/consultancies?preset=closure_due"],
+          ["Documents", "/documents"],
+          ["Download Records", "/reports"],
+        ].map(([label, href]) => (
+          <Button key={label} asChild variant="secondary" size="sm">
+            <Link href={href}>{label}</Link>
+          </Button>
+        ))}
+      </nav>
 
       <Card>
         <CardHeader>
@@ -117,7 +151,15 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
 
   if (isOversightRole(session.user.roles)) {
     const { department } = await searchParams;
-    return <AdminOverview roles={session.user.roles} departmentId={await resolveDepartmentParam(department)} />;
+    const departmentId = effectiveDepartmentFilter(session.user, await resolveDepartmentParam(department));
+    return (
+      <AdminOverview
+        roles={session.user.roles}
+        departmentId={departmentId}
+        userDepartmentId={session.user.departmentId}
+        departmentLocked={!canViewAllDepartments(session.user)}
+      />
+    );
   }
 
   return <FacultyDashboard facultyId={session.user.id} />;

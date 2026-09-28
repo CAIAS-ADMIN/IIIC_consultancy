@@ -5,6 +5,7 @@ import { authErrorResponse } from "@/lib/auth/errors";
 import { db } from "@/db";
 import { holds, consultancies } from "@/db/schema";
 import { getConsultancyById } from "@/db/queries/consultancies";
+import { isOutOfDepartmentHod } from "@/lib/consultancy/access";
 import { recordAuditEvent } from "@/lib/audit";
 
 /** resumeFromHold — closes the open hold row; does not extend completion dates or mark the paused time as Delayed. */
@@ -20,6 +21,9 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
   const consultancy = await getConsultancyById(id);
   if (!consultancy) {
     return Response.json({ error: "Not found" }, { status: 404 });
+  }
+  if (isOutOfDepartmentHod(user, consultancy)) {
+    return Response.json({ error: "Forbidden: HOD can only act on consultancies of their own department" }, { status: 403 });
   }
   if (consultancy.status !== "on_hold") {
     return Response.json({ error: `Consultancy is not on hold (status '${consultancy.status}')` }, { status: 409 });

@@ -8,6 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
+import { FilterInput } from "@/components/ui/filter-input";
+import { matchesQuery } from "@/lib/search";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/use-toast";
@@ -46,6 +48,8 @@ export function DepartmentManagementHub({ departments, canManage }: { department
   const [name, setName] = React.useState("");
   const [code, setCode] = React.useState("");
   const [busy, setBusy] = React.useState(false);
+  const [filter, setFilter] = React.useState("");
+  const visibleDepartments = departments.filter((d) => matchesQuery(filter, d.name, d.code));
 
   const fail = (title: string, err: unknown) =>
     toast({ title, description: err instanceof Error ? err.message : "Something went wrong.", variant: "destructive" });
@@ -167,12 +171,21 @@ export function DepartmentManagementHub({ departments, canManage }: { department
             </Button>
           )}
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-4">
+          {departments.length > 0 && (
+            <FilterInput id="department-filter" label="Search departments" placeholder="Search name or code" value={filter} onChange={setFilter} />
+          )}
           <DataTable
             columns={columns}
-            data={departments}
+            data={visibleDepartments}
             keyFor={(r) => r.id}
-            emptyState={<EmptyState icon={Building2} title="No departments yet" />}
+            emptyState={
+              filter.trim() ? (
+                <EmptyState icon={Building2} title="No matches" description={`No department matches “${filter.trim()}”.`} />
+              ) : (
+                <EmptyState icon={Building2} title="No departments yet" />
+              )
+            }
           />
         </CardContent>
       </Card>

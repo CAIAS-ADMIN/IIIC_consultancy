@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, integer, numeric, date, timestamp, index } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, text, boolean, integer, numeric, date, timestamp, index } from "drizzle-orm/pg-core";
 import { consultancies } from "./consultancies";
 
 /**
@@ -27,6 +27,10 @@ export const agreements = pgTable(
     paymentModeCode: varchar("payment_mode_code", { length: 100 }),
     paymentModeOther: varchar("payment_mode_other", { length: 255 }),
     numberOfInstallments: integer("number_of_installments"),
+    renewalClause: text("renewal_clause"),
+    confidentialityClause: boolean("confidentiality_clause"),
+    ipClause: boolean("ip_clause"),
+    paymentTermsIncluded: boolean("payment_terms_included"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

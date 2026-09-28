@@ -5,12 +5,12 @@ import { requireSession } from "@/lib/auth/requireRole";
 import { authErrorResponse } from "@/lib/auth/errors";
 import { presignDocumentSchema } from "@/lib/validation/documents";
 import { getConsultancyById } from "@/db/queries/consultancies";
+import { canManageDocuments } from "@/lib/consultancy/access";
 import { buildObjectKey } from "@/lib/documents/objectKey";
 import { documentsBucket, s3Client, ensureBucketExists } from "@/lib/storage/rustfs";
 
 const UPLOAD_URL_EXPIRY_SECONDS = 300;
 
-const EDITOR_ROLES = ["hod", "iiic_admin", "system_admin"] as const;
 
 /** POST /api/documents/presign — a presigned PUT URL for a given consultancy + document category. */
 export async function POST(request: NextRequest) {
@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
   if (!consultancy) {
     return Response.json({ error: "Not found" }, { status: 404 });
   }
-  if (consultancy.createdBy !== user.id && !user.roles.some((r) => EDITOR_ROLES.includes(r as (typeof EDITOR_ROLES)[number]))) {
+  if (!canManageDocuments(user, consultancy)) {
     return Response.json({ error: "Forbidden" }, { status: 403 });
   }
 

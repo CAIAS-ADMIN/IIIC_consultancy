@@ -1,5 +1,6 @@
 "use client";
 
+import { DownloadRecordPdfButton } from "@/components/records/record-actions";
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -11,31 +12,55 @@ import { submitConsultancySchema } from "@/lib/validation/consultancy";
 import { createInitialWizardState, type WizardState } from "@/lib/wizard/types";
 import { buildDraftMinimal, buildDraftPatchBody, buildSubmitPayload } from "@/lib/wizard/payload";
 import { validateStep } from "@/lib/wizard/validate";
-import { mapZodErrorToSteps, type StepErrors } from "@/lib/wizard/errors";
-import { Step1Client } from "./steps/step1-client";
-import { Step2Consultancy } from "./steps/step2-consultancy";
-import { Step3TeamAgreement } from "./steps/step3-team-agreement";
-import { Step4Review } from "./steps/step4-review";
-import type { MasterDataMap } from "./wizard-props";
+import { emptyStepErrors, mapZodErrorToSteps, type StepErrors } from "@/lib/wizard/errors";
+import { StatusBadge } from "@/components/ui/status-badge";
+import type { ConsultancyStatus } from "@/db/schema/enums";
+import { Step1Preliminary } from "./steps/step1-preliminary";
+import { Step2Client } from "./steps/step2-client";
+import { Step3ConsultancyScope } from "./steps/step3-consultancy-scope";
+import { Step4TeamAgreement } from "./steps/step4-team-agreement";
+import { Step5TimelineMilestones } from "./steps/step5-timeline-milestones";
+import { Step6FinancialsTax } from "./steps/step6-financials-tax";
+import { Step7ResourcesReview } from "./steps/step7-resources-review";
+import type { MasterDataMap, PrincipalInfo, StaffMember } from "./wizard-props";
 
 const STEPS = [
+  { label: "Preliminary & Institutional" },
   { label: "Client Details" },
-  { label: "Consultancy Details" },
-  { label: "Team & Agreement" },
-  { label: "Review & Submit" },
+  { label: "Consultancy & Scope" },
+  { label: "Agreement & Team" },
+  { label: "Timeline & Milestones" },
+  { label: "Financials & Tax" },
+  { label: "Resources & Review" },
 ];
 
-const EMPTY_ERRORS: StepErrors[] = [{}, {}, {}, {}];
+type SubmittedInfo = { consultancyCode: string | null; id: string; status: ConsultancyStatus; submittedAt: string | null };
+
+/** Flattens a zod `flatten()` error body ({ formErrors, fieldErrors } or nested sections) into readable text. */
+function describeServerErrors(error: unknown): string {
+  const messages: string[] = [];
+  const walk = (value: unknown) => {
+    if (typeof value === "string") messages.push(value);
+    else if (Array.isArray(value)) value.forEach(walk);
+    else if (value && typeof value === "object") Object.values(value).forEach(walk);
+  };
+  walk(error);
+  return [...new Set(messages)].slice(0, 6).join(" · ");
+}
 
 export function ConsultancyWizard({
-  facultyName,
+  onBehalf = false,
+  principal: signedInPrincipal,
+  staff,
   departments,
   masterData,
   defaultAcademicYearCode,
   initialDraftId,
   initialState,
 }: {
-  facultyName: string;
+  onBehalf?: boolean;
+  principal: PrincipalInfo;
+  staff: StaffMember[];
   departments: { id: string; name: string }[];
   masterData: MasterDataMap;
   defaultAcademicYearCode: string;
@@ -46,17 +71,49 @@ export function ConsultancyWizard({
   const { toast } = useToast();
 
   const [state, setState] = React.useState<WizardState>(
-    () => initialState ?? createInitialWizardState({ academicYearCode: defaultAcademicYearCode, facultyName })
+    () =>
+      initialState ??
+      createInitialWizardState(
+        onBehalf
+          ? { academicYearCode: defaultAcademicYearCode }
+          : {
+              academicYearCode: defaultAcademicYearCode,
+              facultyInChargeId: signedInPrincipal.id,
+              departmentId: signedInPrincipal.departmentId,
+              principal: {
+                name: signedInPrincipal.name,
+                employeeId: signedInPrincipal.employeeId,
+                departmentName: signedInPrincipal.departmentName,
+              },
+            }
+      )
   );
+
+  // Whoever the record is for: an admin sees the employee they picked, never their own details.
+  const principal = React.useMemo<PrincipalInfo>(() => {
+    const chosenId = state.consultancy.facultyInChargeId;
+    if (!onBehalf && (!chosenId || chosenId === signedInPrincipal.id)) return signedInPrincipal;
+    const chosen = staff.find((u) => u.id === chosenId);
+    if (!chosen) return { id: "", name: "", employeeId: "", email: "", phone: "", departmentId: "", departmentName: "" };
+    return {
+      id: chosen.id,
+      name: chosen.name,
+      employeeId: chosen.employeeId ?? "",
+      email: chosen.email ?? "",
+      phone: chosen.phone ?? "",
+      departmentId: chosen.departmentId ?? "",
+      departmentName: departments.find((d) => d.id === chosen.departmentId)?.name ?? "",
+    };
+  }, [onBehalf, signedInPrincipal, staff, departments, state.consultancy.facultyInChargeId]);
   const [draftId, setDraftId] = React.useState<string | null>(initialDraftId);
   const [stepIndex, setStepIndex] = React.useState(0);
-  const [errorsByStep, setErrorsByStep] = React.useState<StepErrors[]>(EMPTY_ERRORS);
+  const [errorsByStep, setErrorsByStep] = React.useState<StepErrors[]>(emptyStepErrors);
   const [saving, setSaving] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
   const [lastSavedAt, setLastSavedAt] = React.useState<Date | null>(null);
   const [signedAgreementUploaded, setSignedAgreementUploaded] = React.useState(false);
   const [submitError, setSubmitError] = React.useState<string | null>(null);
-  const [submitted, setSubmitted] = React.useState<{ consultancyCode: string | null; id: string } | null>(null);
+  const [submitted, setSubmitted] = React.useState<SubmittedInfo | null>(null);
 
   function updateSection<K extends keyof WizardState>(key: K, patch: Partial<WizardState[K]>) {
     setState((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
@@ -76,26 +133,24 @@ export function ConsultancyWizard({
     return data.id as string;
   }
 
-  async function saveDraft(options: { silent?: boolean } = {}): Promise<boolean> {
-    const minimalCheck = validateStep(1, state);
-    // Consultancy Details carries the fields a draft row actually needs to exist
-    // (title/department/type/area/academic year) — without them there's nothing
-    // to create yet, so send the user there instead of a failed request.
-    if (!draftId && (!state.consultancy.title.trim() || !state.consultancy.departmentId || !state.consultancy.consultancyTypeCode || !state.consultancy.teamTypeCode || !state.consultancy.consultancyAreaCode || !state.consultancy.academicYearCode)) {
+  /** Saves the draft (creating it if needed); resolves to its id, or null if it couldn't be saved. */
+  async function saveDraft(options: { silent?: boolean } = {}): Promise<string | null> {
+    const minimalCheck = validateStep(0, state);
+    if (!draftId && (!state.consultancy.departmentId || !state.consultancy.academicYearCode)) {
       setErrorsByStep((prev) => {
         const next = [...prev];
-        next[1] = { ...next[1], ...minimalCheck.errors };
+        next[0] = { ...next[0], ...minimalCheck.errors };
         return next;
       });
-      setStepIndex(1);
+      setStepIndex(0);
       if (!options.silent) {
         toast({
-          title: "Complete Consultancy Details first",
-          description: "Title, department, academic year, type, and area are needed to save a draft.",
+          title: "Select Department & Academic Year",
+          description: "Department and academic year are needed to save a draft.",
           variant: "destructive",
         });
       }
-      return false;
+      return null;
     }
 
     setSaving(true);
@@ -103,7 +158,7 @@ export function ConsultancyWizard({
       const id = await ensureDraftExists();
       if (!id) {
         if (!options.silent) toast({ title: "Could not save draft", variant: "destructive" });
-        return false;
+        return null;
       }
       const res = await fetch(`/api/consultancies/${id}`, {
         method: "PATCH",
@@ -112,16 +167,16 @@ export function ConsultancyWizard({
       });
       if (!res.ok) {
         if (!options.silent) toast({ title: "Could not save draft", variant: "destructive" });
-        return false;
+        return null;
       }
       setLastSavedAt(new Date());
       if (!options.silent) toast({ title: "Draft saved", variant: "success" });
-      return true;
+      return id;
     } catch {
       if (!options.silent) {
         toast({ title: "Could not save draft", description: "Network error — check your connection and try again.", variant: "destructive" });
       }
-      return false;
+      return null;
     } finally {
       setSaving(false);
     }
@@ -139,12 +194,18 @@ export function ConsultancyWizard({
       copy[stepIndex] = errors;
       return copy;
     });
-    if (!valid) return;
+    if (!valid) {
+      const messages = [...new Set(Object.values(errors))];
+      toast({
+        title: "Required Fields Missing",
+        description:
+          messages.slice(0, 5).join(" · ") + (messages.length > 5 ? ` · and ${messages.length - 5} more (highlighted below)` : ""),
+        variant: "destructive",
+      });
+      return;
+    }
 
-    // Ensure the draft row exists once Consultancy Details is complete, so
-    // Step 4's document upload has a consultancy id to attach to well before
-    // the user reaches it.
-    if (stepIndex === 1) {
+    if (stepIndex === 0) {
       await saveDraft({ silent: true });
     }
     goToStep(Math.min(stepIndex + 1, STEPS.length - 1));
@@ -162,11 +223,18 @@ export function ConsultancyWizard({
       const { errorsByStep: mapped, firstFailingStep } = mapZodErrorToSteps(parsed.error);
       setErrorsByStep(mapped);
       goToStep(firstFailingStep);
-      setSubmitError("Some required fields are missing or invalid — fixed steps are highlighted above.");
+      const messages = [...new Set(parsed.error.issues.map((i) => i.message))];
+      setSubmitError(
+        `Please complete ${messages.length === 1 ? "this" : "these"} before submitting: ${messages.slice(0, 6).join(" · ")}${
+          messages.length > 6 ? ` · and ${messages.length - 6} more` : ""
+        }. You've been taken to the first step that needs attention.`
+      );
       return;
     }
     if (!signedAgreementUploaded) {
-      setSubmitError("Upload the Signed Agreement document before submitting.");
+      setSubmitError(
+        'The Signed MoU / Consultancy Agreement / Work Order has not been uploaded. In "Document Upload Checklist", choose that Document Type, pick the file and press Upload Document — files uploaded under another type (e.g. Scope of Work) don\'t count.'
+      );
       return;
     }
 
@@ -184,34 +252,61 @@ export function ConsultancyWizard({
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setSubmitError(typeof body.error === "string" ? body.error : "Submission failed. Please try again.");
+        setSubmitError(typeof body.error === "string" ? body.error : `Submission failed: ${describeServerErrors(body.error) || "please try again."}`);
         return;
       }
-      setSubmitted({ consultancyCode: body.data.consultancyCode ?? null, id: body.data.id });
+      setSubmitted({
+        consultancyCode: body.data.consultancyCode ?? null,
+        id: body.data.id,
+        status: body.data.status,
+        submittedAt: body.data.submittedAt ?? null,
+      });
     } finally {
       setSubmitting(false);
     }
   }
 
   if (submitted) {
+    const registeredOn = submitted.submittedAt ? new Date(submitted.submittedAt) : new Date();
     return (
-      <Card className="mx-auto max-w-lg">
-        <CardContent className="flex flex-col items-center gap-4 p-8 text-center">
-          <h1 className="text-xl font-bold text-foreground">Consultancy Submitted</h1>
-          <p className="text-sm text-muted-foreground">
-            Your consultancy has been submitted for verification.
-          </p>
-          {submitted.consultancyCode && (
-            <p className="rounded-md bg-primary-soft px-4 py-2 font-mono text-sm font-semibold text-primary-soft-foreground">
-              {submitted.consultancyCode}
-            </p>
-          )}
-          <div className="flex gap-3">
-            <Button variant="secondary" asChild>
-              <Link href="/dashboard">Back to Dashboard</Link>
-            </Button>
+      <Card className="mx-auto w-full max-w-lg">
+        <CardContent className="flex flex-col items-center gap-5 p-6 text-center sm:p-8">
+          <h1 className="text-xl font-bold text-foreground">Consultancy Registration Submitted Successfully</h1>
+          <dl className="grid w-full gap-3 text-left sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <dt className="text-xs text-muted-foreground">Consultancy ID</dt>
+              <dd className="mt-1 rounded-md bg-primary-soft px-3 py-2 font-mono text-sm font-semibold text-primary-soft-foreground">
+                {submitted.consultancyCode ?? "—"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Registration Date</dt>
+              <dd className="text-sm text-foreground">
+                {registeredOn.toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" })}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Status</dt>
+              <dd>
+                <StatusBadge status={submitted.status} />
+              </dd>
+            </div>
+            <div className="sm:col-span-2">
+              <dt className="text-xs text-muted-foreground">Next Step</dt>
+              <dd className="text-sm text-foreground">
+                {submitted.status === "registered"
+                  ? "No verification stage is configured for this consultancy, so it is registered and can be activated."
+                  : "The consultancy registration is now available in the CAIAS Consultancy Portal for verification."}
+              </dd>
+            </div>
+          </dl>
+          <div className="flex w-full flex-col gap-2 sm:flex-row sm:justify-center">
+            <DownloadRecordPdfButton consultancyId={submitted.id} kind="registration" label="Download Registration PDF" variant="secondary" />
             <Button onClick={() => router.push(`/consultancies/${submitted.id}`)}>View Consultancy</Button>
           </div>
+          <Link href="/dashboard" className="text-sm text-primary underline-offset-4 hover:underline">
+            Return to Dashboard
+          </Link>
         </CardContent>
       </Card>
     );
@@ -222,13 +317,18 @@ export function ConsultancyWizard({
     errors: errorsByStep[stepIndex],
     masterData,
     departments,
+    staff,
+    principal,
+    onBehalf,
     updateConsultancy: (patch: Partial<WizardState["consultancy"]>) => updateSection("consultancy", patch),
     updateClient: (patch: Partial<WizardState["client"]>) => updateSection("client", patch),
     updateAgreement: (patch: Partial<WizardState["agreement"]>) => updateSection("agreement", patch),
     updateTeam: (patch: Partial<WizardState["team"]>) => updateSection("team", patch),
     updateFinancial: (patch: Partial<WizardState["financial"]>) => updateSection("financial", patch),
     updateScope: (patch: Partial<WizardState["scope"]>) => updateSection("scope", patch),
+    updateTimeline: (patch: Partial<WizardState["timeline"]>) => updateSection("timeline", patch),
     updateResources: (patch: Partial<WizardState["resources"]>) => updateSection("resources", patch),
+    updateDeclaration: (patch: Partial<WizardState["declaration"]>) => updateSection("declaration", patch),
   };
 
   return (
@@ -237,15 +337,20 @@ export function ConsultancyWizard({
 
       <Card>
         <CardContent className="p-5 md:p-6">
-          {stepIndex === 0 && <Step1Client {...stepProps} />}
-          {stepIndex === 1 && <Step2Consultancy {...stepProps} />}
-          {stepIndex === 2 && <Step3TeamAgreement {...stepProps} />}
-          {stepIndex === 3 && (
-            <Step4Review
+          {stepIndex === 0 && <Step1Preliminary {...stepProps} />}
+          {stepIndex === 1 && <Step2Client {...stepProps} />}
+          {stepIndex === 2 && <Step3ConsultancyScope {...stepProps} />}
+          {stepIndex === 3 && <Step4TeamAgreement {...stepProps} />}
+          {stepIndex === 4 && <Step5TimelineMilestones {...stepProps} />}
+          {stepIndex === 5 && <Step6FinancialsTax {...stepProps} />}
+          {stepIndex === 6 && (
+            <Step7ResourcesReview
               {...stepProps}
               draftId={draftId}
+              ensureDraftSaved={() => saveDraft({ silent: true })}
               signedAgreementUploaded={signedAgreementUploaded}
               onSignedAgreementChange={setSignedAgreementUploaded}
+              onEditStep={goToStep}
               submitError={submitError}
             />
           )}

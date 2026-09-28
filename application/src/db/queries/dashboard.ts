@@ -10,6 +10,7 @@ export type FacultyConsultancyRow = {
   status: ConsultancyStatus;
   totalValue: string | null;
   academicYearCode: string;
+  currentCompletionDate: string | null;
   createdAt: Date;
   clientOrganizationName: string | null;
   departmentName: string | null;
@@ -25,6 +26,7 @@ export async function getFacultyConsultancies(facultyId: string): Promise<Facult
       status: consultancies.status,
       totalValue: consultancies.totalValue,
       academicYearCode: consultancies.academicYearCode,
+      currentCompletionDate: consultancies.currentCompletionDate,
       createdAt: consultancies.createdAt,
       clientOrganizationName: clients.organizationName,
       departmentName: departments.name,

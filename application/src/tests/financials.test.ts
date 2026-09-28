@@ -1,7 +1,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createTestSessionCookie } from "./helpers/session";
-import { upsertTestUser, upsertTestDepartment, upsertTestApprovalStageConfig, BASE_URL } from "./helpers/fixtures";
+import { upsertTestUser, upsertTestDepartment, upsertTestApprovalStageConfig, BASE_URL, withRegistrationDefaults } from "./helpers/fixtures";
 import { closeDb, db } from "@/db";
 import { documents } from "@/db/schema";
 
@@ -41,7 +41,7 @@ before(async () => {
     email: "test.hod.phase9@caias.in",
     roles: ["hod"],
   });
-  hodCookie = await createTestSessionCookie({ userId: hod.id, roles: ["hod"] });
+  hodCookie = await createTestSessionCookie({ userId: hod.id, roles: ["hod"], departmentId });
 
   const iiicAdmin = await upsertTestUser({
     keycloakSub: "test-iiicadmin-phase9",
@@ -61,7 +61,7 @@ before(async () => {
 });
 
 function validSubmitPayload(overrides: Record<string, unknown> = {}) {
-  return {
+  return withRegistrationDefaults({
     consultancy: {
       departmentId,
       academicYearCode: "2025-26",
@@ -79,7 +79,7 @@ function validSubmitPayload(overrides: Record<string, unknown> = {}) {
     scope: { scopeOfWork: "Build a test integration.", deliverables: [{ description: "Final report" }] },
     resources: {},
     ...overrides,
-  };
+  });
 }
 
 async function createActiveConsultancy() {

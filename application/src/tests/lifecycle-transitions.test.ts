@@ -1,7 +1,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createTestSessionCookie } from "./helpers/session";
-import { upsertTestUser, upsertTestDepartment, upsertTestApprovalStageConfig, BASE_URL } from "./helpers/fixtures";
+import { upsertTestUser, upsertTestDepartment, upsertTestApprovalStageConfig, BASE_URL, withRegistrationDefaults } from "./helpers/fixtures";
 import { closeDb, db } from "@/db";
 import { documents } from "@/db/schema";
 
@@ -33,7 +33,7 @@ before(async () => {
     email: "test.hod.phase8@caias.in",
     roles: ["hod"],
   });
-  hodCookie = await createTestSessionCookie({ userId: hod.id, roles: ["hod"] });
+  hodCookie = await createTestSessionCookie({ userId: hod.id, roles: ["hod"], departmentId });
 
   const iiicAdmin = await upsertTestUser({
     keycloakSub: "test-iiicadmin-phase8",
@@ -53,7 +53,7 @@ before(async () => {
 });
 
 function validSubmitPayload(overrides: Record<string, unknown> = {}) {
-  return {
+  return withRegistrationDefaults({
     consultancy: {
       departmentId,
       academicYearCode: "2025-26",
@@ -71,7 +71,7 @@ function validSubmitPayload(overrides: Record<string, unknown> = {}) {
     scope: { scopeOfWork: "Build a test integration.", deliverables: [{ description: "Final report" }] },
     resources: {},
     ...overrides,
-  };
+  });
 }
 
 async function createActiveConsultancy() {
@@ -236,6 +236,8 @@ test("on-hold period does not trigger a false completion-overdue or milestone-ov
       reportingPeriodEnd: "2026-02-14",
       status: "on_hold",
       overallProgressPercent: 40,
+      workCompleted: "Work done.",
+      workInProgress: "Work ongoing.",
     }),
   });
   assert.equal(progressWhileOnHold.status, 409);

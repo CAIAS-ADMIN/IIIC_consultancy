@@ -71,6 +71,9 @@ export function HorizontalBarChart({
 /** More slices than this can't get distinct colors (or be told apart on a phone), so the chart falls back to bars. */
 const MAX_DONUT_SLICES = 6;
 
+/** One token per possible slice (see `--chart-*` in globals.css) — never hardcoded hex here. */
+const CHART_SERIES_COLORS = Array.from({ length: MAX_DONUT_SLICES }, (_, i) => `var(--chart-${i + 1})`);
+
 /** Simple SVG Donut/Pie visual distribution chart — becomes a sorted bar chart above `MAX_DONUT_SLICES` categories. */
 export function DonutChart({
   title,
@@ -87,21 +90,11 @@ export function DonutChart({
     return <HorizontalBarChart title={title} subtitle={subtitle} data={[...data].sort((a, b) => b.value - a.value)} />;
   }
 
-  const colors = [
-    "#2E7D32", // Primary green
-    "#F2994A", // Accent orange
-    "#2F80ED", // Info blue
-    "#9B51E0", // Special purple
-    "#E0E0E0", // Muted gray
-    "#6FCF97", // Light green
-    "#EB5757", // Danger red
-  ];
-
   const segments = data.map((item, i) => {
     const startAngle = total > 0 ? (data.slice(0, i).reduce((acc, d) => acc + d.value, 0) / total) * 360 : 0;
     return {
       ...item,
-      color: item.color || colors[i % colors.length],
+      color: item.color || CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.length],
       startAngle,
       percentage: total > 0 ? Math.round((item.value / total) * 100) : 0,
     };
@@ -137,7 +130,7 @@ export function DonutChart({
                       cy={cy}
                       r={r}
                       fill="transparent"
-                      stroke={s.color}
+                      style={{ stroke: s.color }}
                       strokeWidth="16"
                       strokeDasharray={strokeDasharray}
                       strokeDashoffset={strokeDashoffset}

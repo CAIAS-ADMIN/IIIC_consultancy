@@ -2,7 +2,7 @@ import { asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { approvalStageConfigs, consultancies, clients, departments } from "@/db/schema";
 import type { ConsultancyStatus, Role, WorkflowStage } from "@/db/schema/enums";
-import { selectApprovalChain } from "@/lib/consultancy/approval-chain";
+import { selectApprovalChain, approvalChainInputFor } from "@/lib/consultancy/approval-chain";
 
 const VERIFIABLE_STATUSES = ["submitted", "under_verification"] as const;
 
@@ -34,7 +34,7 @@ export type VerificationQueueItem = {
  * is then resolved in memory by the same matching rules
  * (`selectApprovalChain`) — one query instead of one per pending item.
  */
-export async function getVerificationQueue(user: { roles: Role[] }): Promise<VerificationQueueItem[]> {
+export async function getVerificationQueue(user: { roles: Role[]; departmentId?: string | null }): Promise<VerificationQueueItem[]> {
   const [pending, configs] = await Promise.all([
     db
       .select({
@@ -46,6 +46,11 @@ export async function getVerificationQueue(user: { roles: Role[] }): Promise<Ver
         departmentId: consultancies.departmentId,
         consultancyAreaCode: consultancies.consultancyAreaCode,
         totalValue: consultancies.totalValue,
+        consultancyCategoryCode: consultancies.consultancyCategoryCode,
+        caiasResourcesRequired: consultancies.caiasResourcesRequired,
+        ipExpected: consultancies.ipExpected,
+        ipAgreementRequired: consultancies.ipAgreementRequired,
+        confidentialInformation: consultancies.confidentialInformation,
         submittedAt: consultancies.submittedAt,
         departmentName: departments.name,
         clientOrganizationName: clients.organizationName,
@@ -57,14 +62,11 @@ export async function getVerificationQueue(user: { roles: Role[] }): Promise<Ver
     db.select().from(approvalStageConfigs).orderBy(asc(approvalStageConfigs.sequence)),
   ]);
 
-  const isSystemAdmin = user.roles.includes("system_admin");
+  // CAIAS admins may act on any stage (verify / return for re-edit / reject).
+  const isAdmin = user.roles.includes("system_admin") || user.roles.includes("iiic_admin");
 
   const withStage = pending.map((row) => {
-    const chain = selectApprovalChain(configs, {
-      departmentId: row.departmentId,
-      consultancyAreaCode: row.consultancyAreaCode,
-      totalValue: row.totalValue,
-    });
+    const chain = selectApprovalChain(configs, approvalChainInputFor(row));
     const currentStage = chain.find((s) => s.stage === row.workflowStage);
     return {
       row,
@@ -73,7 +75,16 @@ export async function getVerificationQueue(user: { roles: Role[] }): Promise<Ver
   });
 
   return withStage
-    .filter(({ requiredRole }) => requiredRole && (isSystemAdmin || user.roles.includes(requiredRole)))
+    .filter(({ row, requiredRole }) => {
+      if (!requiredRole) return false;
+      if (isAdmin) return true;
+      if (!user.roles.includes(requiredRole)) return false;
+      // An HOD only ever sees their own department's items — none at all without a department on record.
+      if (requiredRole === "hod" && (!user.departmentId || row.departmentId !== user.departmentId)) {
+        return false;
+      }
+      return true;
+    })
     .map(({ row, requiredRole }) => ({
       id: row.id,
       consultancyCode: row.consultancyCode,

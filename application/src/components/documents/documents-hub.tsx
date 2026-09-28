@@ -2,13 +2,11 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { FolderOpen, Plus } from "lucide-react";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
+import { FolderOpen } from "lucide-react";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { EmptyState } from "@/components/ui/empty-state";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { DocumentCategoryPanel } from "./document-category-panel";
+import { DocumentRepository } from "./document-repository";
 import type { ConsultancyStatus } from "@/db/schema/enums";
 
 type ConsultancyOption = {
@@ -28,21 +26,9 @@ export function DocumentsHub({
   existingCategories: string[];
 }) {
   const router = useRouter();
-  const [addedCategories, setAddedCategories] = React.useState<string[]>([]);
-  const [newCategory, setNewCategory] = React.useState("");
-
-  const categories = [...new Set([...existingCategories, ...addedCategories])];
 
   function selectConsultancy(id: string) {
-    setAddedCategories([]);
     router.push(`/documents?consultancy=${id}`);
-  }
-
-  function addCategory() {
-    const trimmed = newCategory.trim();
-    if (!trimmed || categories.includes(trimmed)) return;
-    setAddedCategories((prev) => [...prev, trimmed]);
-    setNewCategory("");
   }
 
   if (consultancies.length === 0) {
@@ -60,18 +46,14 @@ export function DocumentsHub({
   return (
     <div className="flex flex-col gap-6">
       <div className="max-w-md">
-        <Select value={selectedId ?? undefined} onValueChange={selectConsultancy}>
-          <SelectTrigger aria-label="Consultancy">
-            <SelectValue placeholder="Choose a consultancy" />
-          </SelectTrigger>
-          <SelectContent>
-            {consultancies.map((c) => (
-              <SelectItem key={c.id} value={c.id}>
-                {c.consultancyCode ?? "Draft"} — {c.title}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <SearchableSelect
+          aria-label="Consultancy"
+          options={consultancies.map((c) => ({ code: c.id, label: `${c.consultancyCode ?? "Draft"} — ${c.title}` }))}
+          value={selectedId ?? ""}
+          onChange={selectConsultancy}
+          placeholder="Choose a consultancy"
+          searchPlaceholder="Search by Consultancy ID or title…"
+        />
       </div>
 
       {selected && (
@@ -81,42 +63,12 @@ export function DocumentsHub({
             <StatusBadge status={selected.status} />
           </div>
 
-          {categories.length === 0 && (
-            <EmptyState
-              icon={FolderOpen}
-              title="No documents yet"
-              description="Add a document category below to start uploading."
-            />
-          )}
-
-          {categories.map((category) => (
-            <DocumentCategoryPanel key={category} consultancyId={selected.id} category={category} label={category} />
-          ))}
-
-          <div className="flex items-end gap-2 rounded-lg border border-dashed border-border p-4">
-            <div className="flex-1">
-              <label htmlFor="new-category" className="text-sm font-medium text-foreground">
-                Add a document category
-              </label>
-              <Input
-                id="new-category"
-                value={newCategory}
-                onChange={(e) => setNewCategory(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    addCategory();
-                  }
-                }}
-                placeholder="e.g. Progress Report"
-                className="mt-1.5"
-              />
-            </div>
-            <Button type="button" variant="secondary" onClick={addCategory} disabled={!newCategory.trim()}>
-              <Plus className="h-4 w-4" aria-hidden />
-              Add
-            </Button>
-          </div>
+          <DocumentRepository
+            key={selected.id}
+            consultancyId={selected.id}
+            existingCategories={existingCategories}
+            pinnedCategories={["Signed Agreement"]}
+          />
         </div>
       )}
     </div>

@@ -10,11 +10,15 @@ import {
   consultancyTeamMembers,
   deliverables,
   consultancyDepartments,
+  milestones,
+  paymentSchedules,
 } from "@/db/schema";
 import { submitConsultancySchema } from "@/lib/validation/consultancy";
 import { getConsultancyById } from "@/db/queries/consultancies";
+import { canEditDraft } from "@/lib/consultancy/access";
+import { resolveRequestedFacultyInCharge } from "@/lib/consultancy/faculty-in-charge";
 import { allocateConsultancyId } from "@/lib/consultancy/id";
-import { resolveApprovalChain } from "@/lib/consultancy/approval-chain";
+import { resolveApprovalChain, approvalChainInputFor } from "@/lib/consultancy/approval-chain";
 import { assertWorkflowStage } from "@/lib/consultancy/workflow";
 import { recordAuditEvent } from "@/lib/audit";
 import { notifyRole, notifyUser } from "@/lib/notifications";
@@ -57,10 +61,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   if (existing.status !== "draft") {
     return Response.json({ error: `Cannot submit a consultancy in status '${existing.status}'` }, { status: 409 });
   }
-  if (
-    existing.createdBy !== user.id &&
-    !user.roles.some((r) => ["hod", "iiic_admin", "system_admin"].includes(r))
-  ) {
+  if (!canEditDraft(user, existing)) {
     return Response.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -70,6 +71,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
   const input = parsed.data;
+  const facultyInCharge = await resolveRequestedFacultyInCharge(user, body?.consultancy?.facultyInChargeId);
+  if (facultyInCharge.error) {
+    return Response.json({ error: facultyInCharge.error }, { status: 400 });
+  }
 
   // Agreement Date cannot be later than submission date if already executed.
   const today = new Date().toISOString().slice(0, 10);
@@ -105,22 +110,47 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         .update(consultancies)
         .set({
           ...consultancyFields,
+          ...(facultyInCharge.userId ? { facultyInChargeId: facultyInCharge.userId } : {}),
           originalCompletionDate: expectedCompletionDate,
           currentCompletionDate: expectedCompletionDate,
           externalExpertInvolved: input.team.externalExpertInvolved,
           externalExpertDetails: input.team.externalExpertDetails,
+          externalExperts: input.team.externalExpertInvolved ? input.team.externalExperts : [],
           rolesAndResponsibilities: input.team.rolesAndResponsibilities,
           totalValue: input.financial.totalValue,
           currencyCode: input.financial.currencyCode,
+          currencyOther: input.financial.currencyCode === "other" ? input.financial.currencyOther : null,
           taxApplicable: input.financial.taxApplicable,
+          taxRatePercent: input.financial.taxApplicable ? input.financial.taxRatePercent || null : null,
+          taxAmount: input.financial.taxApplicable ? input.financial.taxAmount || null : null,
           taxDetails: input.financial.taxDetails,
           estimatedInstitutionalCosts: input.financial.estimatedInstitutionalCosts,
           otherApprovedCosts: input.financial.otherApprovedCosts,
           scopeOfWork: input.scope.scopeOfWork,
           expectedOutcomes: input.scope.expectedOutcomes,
           clientAcceptanceRequired: input.scope.clientAcceptanceRequired,
-          ndaRequired: input.resources.ndaRequired,
-          ipAgreementRequired: input.resources.ipAgreementRequired,
+          // Screen 12 answers imply the NDA / IP-agreement document requirements
+          // (they can still be set directly for older callers).
+          ndaRequired:
+            input.resources.ndaRequired ||
+            (input.resources.confidentialInformation && input.resources.ndaAvailable === true),
+          ipAgreementRequired: input.resources.ipAgreementRequired || input.resources.ipExpected === "yes",
+          ipExpected: input.resources.ipExpected,
+          ipTypeCodes: input.resources.ipExpected === "yes" ? input.resources.ipTypeCodes : [],
+          ipTypeOther: input.resources.ipExpected === "yes" && input.resources.ipTypeCodes.includes("other") ? input.resources.ipTypeOther : null,
+          ipOwnership: input.resources.ipOwnership,
+          ipCommercialisationRights: input.resources.ipCommercialisationRights,
+          ipRegistrationResponsibility: input.resources.ipRegistrationResponsibility,
+          ipClauseReference: input.resources.ipClauseReference,
+          confidentialInformation: input.resources.confidentialInformation,
+          ndaAvailable: input.resources.confidentialInformation ? (input.resources.ndaAvailable ?? null) : null,
+          confidentialityJustification: input.resources.confidentialityJustification,
+          resourceTypeCodes: input.resources.caiasResourcesRequired ? input.resources.resourceTypeCodes : [],
+          resourceTypeOther:
+            input.resources.caiasResourcesRequired && input.resources.resourceTypeCodes.includes("other") ? input.resources.resourceTypeOther : null,
+          resourceItems: input.resources.caiasResourcesRequired ? input.resources.resourceItems : [],
+          declarationAcceptedAt: new Date(),
+          declarationAcceptedBy: user.id,
           caiasResourcesRequired: input.resources.caiasResourcesRequired,
           laboratoryRequired: input.resources.laboratoryRequired,
           equipmentRequired: input.resources.equipmentRequired,
@@ -164,16 +194,31 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         input.scope.deliverables.map((d) => ({ ...d, consultancyId: id }))
       );
 
-      const consultancyCode = await allocateConsultancyId(tx, input.consultancy.academicYearCode);
+      // Screen 9 milestones and Screen 10 payment schedule are planned at
+      // registration; execution-phase updates happen on the record later.
+      await tx.delete(milestones).where(eq(milestones.consultancyId, id));
+      if (input.timeline.milestones.length > 0) {
+        await tx.insert(milestones).values(input.timeline.milestones.map((m) => ({ ...m, consultancyId: id })));
+      }
+      await tx.delete(paymentSchedules).where(eq(paymentSchedules.consultancyId, id));
+      await tx.insert(paymentSchedules).values(
+        input.financial.paymentSchedule.map((p) => ({ ...p, consultancyId: id }))
+      );
+
+      // A registration an admin sent back for re-edit keeps its Consultancy ID —
+      // unless its academic year was changed, since the ID embeds the year.
+      const consultancyCode =
+        existing.consultancyCode && existing.academicYearCode === input.consultancy.academicYearCode
+          ? existing.consultancyCode
+          : await allocateConsultancyId(tx, input.consultancy.academicYearCode);
 
       // Which verification/approval stages apply is read from approval_stage_configs at
       // runtime (Phase 6) — a consultancy with no configured stages for its
       // department/area/value has nothing to gate on and goes straight to registered.
-      const chain = await resolveApprovalChain(tx, {
-        departmentId: input.consultancy.departmentId,
-        consultancyAreaCode: input.consultancy.consultancyAreaCode,
-        totalValue: input.financial.totalValue,
-      });
+      // Resolved from the row as just saved above, so verify/activation later
+      // evaluate exactly the same conditions (category, resources, IP/confidentiality).
+      const savedForChain = await tx.query.consultancies.findFirst({ where: eq(consultancies.id, id) });
+      const chain = await resolveApprovalChain(tx, approvalChainInputFor(savedForChain!));
       const firstStage = chain[0];
 
       const [submitted] = await tx
@@ -214,10 +259,39 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           },
           tx
         );
-      } else {
         await notifyUser(
           {
-            userId: submitted.createdBy,
+            userId: submitted.facultyInChargeId,
+            consultancyId: id,
+            type: "submitted",
+            message: `Registration ${submitted.consultancyCode} ("${submitted.title}") was submitted and is awaiting verification.`,
+          },
+          tx
+        );
+        if (firstStage.approverRole !== "iiic_admin") {
+          await notifyRole(
+            {
+              role: "iiic_admin",
+              consultancyId: id,
+              type: "new_submission",
+              message: `New consultancy registration ${submitted.consultancyCode} ("${submitted.title}") was submitted.`,
+            },
+            tx
+          );
+        }
+      } else {
+        await notifyRole(
+          {
+            role: "finance",
+            consultancyId: id,
+            type: "new_registered",
+            message: `New consultancy registered: ${submitted.consultancyCode} ("${submitted.title}").`,
+          },
+          tx
+        );
+        await notifyUser(
+          {
+            userId: submitted.facultyInChargeId,
             consultancyId: id,
             type: "registered",
             message: `Consultancy ${submitted.consultancyCode} ("${submitted.title}") has been registered.`,

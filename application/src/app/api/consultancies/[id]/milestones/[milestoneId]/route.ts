@@ -66,8 +66,8 @@ export async function PATCH(
     entityId: milestoneId,
     action: "milestone_updated",
     actorId: user.id,
-    oldValue: { status: existingMilestone.status, actualDate: existingMilestone.actualDate },
-    newValue: { status: updated.status, actualDate: updated.actualDate },
+    oldValue: { status: existingMilestone.status, actualStartDate: existingMilestone.actualStartDate, actualDate: existingMilestone.actualDate },
+    newValue: { status: updated.status, actualStartDate: updated.actualStartDate, actualDate: updated.actualDate },
   });
 
   return Response.json({ data: updated });

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { createTestSessionCookie } from "./helpers/session";
-import { upsertTestUser, upsertTestDepartment, upsertTestApprovalStageConfig, BASE_URL } from "./helpers/fixtures";
+import { upsertTestUser, upsertTestDepartment, upsertTestApprovalStageConfig, BASE_URL, withRegistrationDefaults } from "./helpers/fixtures";
 import { closeDb, db } from "@/db";
 import { documents } from "@/db/schema";
 
@@ -35,7 +35,7 @@ before(async () => {
     email: "test.hod.phase7@caias.in",
     roles: ["hod"],
   });
-  hodCookie = await createTestSessionCookie({ userId: hod.id, roles: ["hod"] });
+  hodCookie = await createTestSessionCookie({ userId: hod.id, roles: ["hod"], departmentId });
 
   const iiicAdmin = await upsertTestUser({
     keycloakSub: "test-iiicadmin-phase7",
@@ -63,7 +63,7 @@ before(async () => {
 });
 
 function validSubmitPayload(overrides: Record<string, unknown> = {}) {
-  return {
+  return withRegistrationDefaults({
     consultancy: {
       departmentId,
       academicYearCode: "2025-26",
@@ -95,7 +95,7 @@ function validSubmitPayload(overrides: Record<string, unknown> = {}) {
     },
     resources: {},
     ...overrides,
-  };
+  });
 }
 
 async function createRegisteredConsultancy(overrides: Record<string, unknown> = {}) {
@@ -268,6 +268,8 @@ test("progress updates: only recordable on an active consultancy, listed in chro
       reportingPeriodEnd: "2026-01-31",
       status: "on_track",
       overallProgressPercent: 10,
+      workCompleted: "Work done.",
+      workInProgress: "Work ongoing.",
     }),
   });
   assert.equal(forbiddenBeforeActive.status, 403);
@@ -281,6 +283,8 @@ test("progress updates: only recordable on an active consultancy, listed in chro
       reportingPeriodEnd: "2026-01-31",
       status: "on_track",
       overallProgressPercent: 20,
+      workCompleted: "Work done.",
+      workInProgress: "Work ongoing.",
     }),
   });
   assert.equal(first.status, 201);
@@ -294,6 +298,8 @@ test("progress updates: only recordable on an active consultancy, listed in chro
       reportingPeriodEnd: "2026-02-28",
       status: "delayed",
       overallProgressPercent: 35,
+      workCompleted: "Work done.",
+      workInProgress: "Work ongoing.",
     }),
   });
   assert.equal(second.status, 201);

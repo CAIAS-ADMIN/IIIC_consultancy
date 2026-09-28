@@ -1,14 +1,35 @@
 import type { NextRequest } from "next/server";
+import { canEditDraft, canViewConsultancy } from "@/lib/consultancy/access";
+import { resolveRequestedFacultyInCharge } from "@/lib/consultancy/faculty-in-charge";
 import { eq } from "drizzle-orm";
 import { requireSession } from "@/lib/auth/requireRole";
 import { authErrorResponse } from "@/lib/auth/errors";
 import { db } from "@/db";
-import { consultancies, clients, agreements, consultancyTeamMembers, deliverables, consultancyDepartments } from "@/db/schema";
+import {
+  consultancies,
+  clients,
+  agreements,
+  consultancyTeamMembers,
+  deliverables,
+  consultancyDepartments,
+  milestones,
+  paymentSchedules,
+} from "@/db/schema";
 import { getConsultancyById, getClientByConsultancyId, getAgreementByConsultancyId } from "@/db/queries/consultancies";
+import {
+  pickAgreementFields,
+  pickClientFields,
+  pickDeliverableFields,
+  pickDraftConsultancyFields,
+  pickPaymentScheduleFields,
+  pickPlannedMilestoneFields,
+  pickTeamMemberFields,
+} from "@/lib/consultancy/draft-fields";
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  let viewer;
   try {
-    await requireSession();
+    viewer = await requireSession();
   } catch (error) {
     return authErrorResponse(error);
   }
@@ -18,13 +39,18 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   if (!consultancy) {
     return Response.json({ error: "Not found" }, { status: 404 });
   }
+  if (!(await canViewConsultancy(viewer, consultancy))) {
+    return Response.json({ error: "Not found" }, { status: 404 });
+  }
 
-  const [client, agreement, teamMembers, deliverableRows, departmentsInvolvedRows] = await Promise.all([
+  const [client, agreement, teamMembers, deliverableRows, departmentsInvolvedRows, milestoneRows, scheduleRows] = await Promise.all([
     getClientByConsultancyId(id),
     getAgreementByConsultancyId(id),
     db.query.consultancyTeamMembers.findMany({ where: eq(consultancyTeamMembers.consultancyId, id) }),
     db.query.deliverables.findMany({ where: eq(deliverables.consultancyId, id) }),
     db.query.consultancyDepartments.findMany({ where: eq(consultancyDepartments.consultancyId, id) }),
+    db.query.milestones.findMany({ where: eq(milestones.consultancyId, id) }),
+    db.query.paymentSchedules.findMany({ where: eq(paymentSchedules.consultancyId, id) }),
   ]);
 
   return Response.json({
@@ -34,6 +60,8 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
       agreement,
       teamMembers,
       deliverables: deliverableRows,
+      milestones: milestoneRows,
+      paymentSchedule: scheduleRows,
       departmentsInvolved: departmentsInvolvedRows.map((r) => r.departmentId),
     },
   });
@@ -78,6 +106,20 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       );
     }
 
+    // Keep each field's shape: a list stays a list, a Yes/No stays boolean.
+    const current = existing as unknown as Record<string, unknown>;
+    const mistyped = Object.keys(body).filter((key) => {
+      const was = current[key];
+      const now = body[key];
+      if (typeof was === "boolean") return typeof now !== "boolean";
+      if (Array.isArray(was)) return !Array.isArray(now);
+      if (was !== null && typeof was === "object" && !(was instanceof Date)) return now === null || typeof now !== "object";
+      return now !== null && typeof now === "object";
+    });
+    if (mistyped.length > 0) {
+      return Response.json({ error: `Invalid value for: ${mistyped.join(", ")}` }, { status: 400 });
+    }
+
     if (Object.keys(body).length > 0) {
       await db
         .update(consultancies)
@@ -96,13 +138,28 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     );
   }
 
-  if (existing.createdBy !== user.id && !user.roles.some((r) => ["hod", "iiic_admin", "system_admin"].includes(r))) {
+  if (!canEditDraft(user, existing)) {
     return Response.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const body = await request.json();
-  const { client, agreement, teamMembers, deliverables: deliverableInputs, departmentsInvolved, ...consultancyFields } =
-    body ?? {};
+  const body = (await request.json()) ?? {};
+  const {
+    client,
+    agreement,
+    teamMembers,
+    deliverables: deliverableInputs,
+    milestones: milestoneInputs,
+    paymentSchedule: scheduleInputs,
+    departmentsInvolved,
+  } = body;
+  const consultancyFields = pickDraftConsultancyFields(body);
+  const facultyInCharge = await resolveRequestedFacultyInCharge(user, body.facultyInChargeId);
+  if (facultyInCharge.error) {
+    return Response.json({ error: facultyInCharge.error }, { status: 400 });
+  }
+  if (facultyInCharge.userId) {
+    consultancyFields.facultyInChargeId = facultyInCharge.userId;
+  }
 
   if (Object.keys(consultancyFields).length > 0) {
     await db
@@ -111,52 +168,72 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       .where(eq(consultancies.id, id));
   }
 
-  if (client) {
+  if (client && typeof client === "object") {
+    const clientFields = pickClientFields(client);
     const existingClient = await getClientByConsultancyId(id);
     if (existingClient) {
-      await db.update(clients).set(client).where(eq(clients.id, existingClient.id));
-    } else {
-      await db.insert(clients).values({ ...client, consultancyId: id });
+      await db.update(clients).set({ ...clientFields, updatedAt: new Date() }).where(eq(clients.id, existingClient.id));
+    } else if (typeof clientFields.organizationName === "string" && typeof clientFields.organizationTypeCode === "string") {
+      await db.insert(clients).values({ ...(clientFields as typeof clients.$inferInsert), consultancyId: id });
     }
   }
 
-  if (agreement) {
+  if (agreement && typeof agreement === "object") {
+    const agreementFields = pickAgreementFields(agreement);
     const existingAgreement = await getAgreementByConsultancyId(id);
     if (existingAgreement) {
-      await db.update(agreements).set(agreement).where(eq(agreements.id, existingAgreement.id));
-    } else {
-      await db.insert(agreements).values({ ...agreement, consultancyId: id });
+      await db.update(agreements).set({ ...agreementFields, updatedAt: new Date() }).where(eq(agreements.id, existingAgreement.id));
+    } else if (agreementFields.agreementTypeCode && agreementFields.paymentTermsCode && agreementFields.agreementValue) {
+      await db.insert(agreements).values({ ...(agreementFields as typeof agreements.$inferInsert), consultancyId: id });
     }
   }
 
-  // Team members / deliverables / departments-involved are child-table rows
-  // with no home on the `consultancies` row itself — persisted here the same
-  // delete-then-reinsert way `submit` does, so a wizard "Save Draft" past
-  // Step 2 doesn't silently lose progress on these sections. Deliberately
-  // lenient (no zod schema enforced) — a draft save should tolerate a
-  // still-incomplete row (e.g. a team member row with no role picked yet)
-  // the way `client`/`agreement`/plain consultancy fields already do above;
-  // the real shape enforcement is `submitConsultancySchema` at submit time.
+  // Child-table sections have no home on the `consultancies` row itself —
+  // persisted here the same delete-then-reinsert way `submit` does, so a
+  // "Save Draft" doesn't silently lose them. Deliberately lenient (no zod
+  // schema) — a draft may be incomplete; `submitConsultancySchema` enforces
+  // the real shape at submit. Rows missing a NOT NULL column are skipped.
   if (Array.isArray(teamMembers)) {
+    const rows = teamMembers.map(pickTeamMemberFields).filter((m) => m.name && m.role);
     await db.delete(consultancyTeamMembers).where(eq(consultancyTeamMembers.consultancyId, id));
-    if (teamMembers.length > 0) {
-      await db.insert(consultancyTeamMembers).values(teamMembers.map((m) => ({ ...m, consultancyId: id })));
+    if (rows.length > 0) {
+      await db
+        .insert(consultancyTeamMembers)
+        .values(rows.map((m) => ({ ...(m as typeof consultancyTeamMembers.$inferInsert), consultancyId: id })));
     }
   }
 
   if (Array.isArray(deliverableInputs)) {
+    const rows = deliverableInputs.map(pickDeliverableFields).filter((d) => d.name || d.description);
     await db.delete(deliverables).where(eq(deliverables.consultancyId, id));
-    if (deliverableInputs.length > 0) {
-      await db.insert(deliverables).values(deliverableInputs.map((d) => ({ ...d, consultancyId: id })));
+    if (rows.length > 0) {
+      await db.insert(deliverables).values(rows.map((d) => ({ ...(d as typeof deliverables.$inferInsert), consultancyId: id })));
+    }
+  }
+
+  if (Array.isArray(milestoneInputs)) {
+    const rows = milestoneInputs.map(pickPlannedMilestoneFields).filter((m) => m.title && m.plannedDate);
+    await db.delete(milestones).where(eq(milestones.consultancyId, id));
+    if (rows.length > 0) {
+      await db.insert(milestones).values(rows.map((m) => ({ ...(m as typeof milestones.$inferInsert), consultancyId: id })));
+    }
+  }
+
+  if (Array.isArray(scheduleInputs)) {
+    const rows = scheduleInputs.map(pickPaymentScheduleFields).filter((p) => p.stageLabel && p.plannedAmount);
+    await db.delete(paymentSchedules).where(eq(paymentSchedules.consultancyId, id));
+    if (rows.length > 0) {
+      await db
+        .insert(paymentSchedules)
+        .values(rows.map((p) => ({ ...(p as typeof paymentSchedules.$inferInsert), plannedDate: (p.plannedDate as string) || null, consultancyId: id })));
     }
   }
 
   if (Array.isArray(departmentsInvolved)) {
+    const ids = departmentsInvolved.filter((d: unknown): d is string => typeof d === "string");
     await db.delete(consultancyDepartments).where(eq(consultancyDepartments.consultancyId, id));
-    if (departmentsInvolved.length > 0) {
-      await db
-        .insert(consultancyDepartments)
-        .values(departmentsInvolved.map((departmentId: string) => ({ consultancyId: id, departmentId })));
+    if (ids.length > 0) {
+      await db.insert(consultancyDepartments).values(ids.map((departmentId) => ({ consultancyId: id, departmentId })));
     }
   }
 

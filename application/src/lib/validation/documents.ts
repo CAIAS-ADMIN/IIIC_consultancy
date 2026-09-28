@@ -16,7 +16,15 @@ export const ALLOWED_DOCUMENT_CONTENT_TYPES = [
   "image/png",
 ] as const;
 
-export const MAX_DOCUMENT_UPLOAD_BYTES = 25 * 1024 * 1024; // 25 MB
+/**
+ * Per-file upload limit — portal spec §15/§48.3: "Maximum file size: 10 MB
+ * per file, configurable". Set NEXT_PUBLIC_MAX_UPLOAD_MB to change it; the
+ * NEXT_PUBLIC_ prefix makes the same value reach the browser's pre-check,
+ * so client and server always agree.
+ */
+const configuredUploadMb = Number(process.env.NEXT_PUBLIC_MAX_UPLOAD_MB);
+export const MAX_DOCUMENT_UPLOAD_MB = Number.isFinite(configuredUploadMb) && configuredUploadMb > 0 ? configuredUploadMb : 10;
+export const MAX_DOCUMENT_UPLOAD_BYTES = Math.round(MAX_DOCUMENT_UPLOAD_MB * 1024 * 1024);
 
 export const presignDocumentSchema = z.object({
   consultancyId: z.string().uuid(),

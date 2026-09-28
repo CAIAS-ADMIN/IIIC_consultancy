@@ -1,6 +1,7 @@
-import { and, count, desc, eq, gte, ilike, lte, or, getTableColumns, type SQL } from "drizzle-orm";
+import { and, count, desc, eq, exists, gte, ilike, inArray, isNotNull, isNull, lte, or, getTableColumns, sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
-import { consultancies, clients } from "@/db/schema";
+import { agreements, closures, consultancies, clients } from "@/db/schema";
+import { isSearchPreset, type SearchPreset } from "./search-presets";
 import { consultancyStatusEnum, paymentStatusEnum, type ConsultancyStatus, type PaymentStatus } from "@/db/schema/enums";
 import { getFinancialSummaries } from "./financials";
 
@@ -19,7 +20,46 @@ export type ConsultancySearchFilters = {
   resourceUsage?: boolean;
   /** Derived, not a SQL column — applied after fetching the SQL-matching set. */
   paymentStatus?: PaymentStatus;
+  clientTypeCode?: string;
+  consultancyCategoryCode?: string;
+  startFrom?: string;
+  startTo?: string;
+  completionFrom?: string;
+  completionTo?: string;
+  agreementReference?: string;
+  /** Default: archived records excluded. */
+  archived?: "include" | "only";
+  preset?: SearchPreset;
 };
+
+/** SQL for each dashboard KPI view (spec §67) — the KPI counts use this too, so tile and list always agree. */
+export function presetCondition(preset: SearchPreset): SQL {
+  const today = new Date().toISOString().slice(0, 10);
+  const pastCompletion = and(inArray(consultancies.status, ["active", "delayed"]), lte(consultancies.currentCompletionDate, today))!;
+  switch (preset) {
+    case "pending_verification":
+      return inArray(consultancies.status, ["submitted", "under_verification"]);
+    case "approval_pending":
+      return and(
+        inArray(consultancies.status, ["submitted", "under_verification"]),
+        eq(consultancies.workflowStage, "competent_authority_approval_pending")
+      )!;
+    case "closure_pending":
+      return eq(consultancies.status, "closure_requested");
+    case "finance_pending":
+      // A closure waiting for Finance to confirm the financial position.
+      return and(
+        eq(consultancies.status, "closure_requested"),
+        exists(
+          sql`(select 1 from ${closures} where ${closures.consultancyId} = ${consultancies.id} and ${closures.status} = 'requested' and (${closures.financeVerificationStatus} is null or ${closures.financeVerificationStatus} <> 'verified'))`
+        )
+      )!;
+    case "closure_due":
+      return pastCompletion;
+    case "pending_actions":
+      return or(inArray(consultancies.status, ["draft", "clarification_required"]), pastCompletion)!;
+  }
+}
 
 const MAX_PAGE_SIZE = 100;
 
@@ -42,6 +82,15 @@ export function parseSearchFilters(searchParams: URLSearchParams): ConsultancySe
     ipInvolvement: getBool("ipInvolvement"),
     resourceUsage: getBool("resourceUsage"),
     paymentStatus: get("paymentStatus") as PaymentStatus | undefined,
+    clientTypeCode: get("clientTypeCode"),
+    consultancyCategoryCode: get("consultancyCategoryCode"),
+    startFrom: get("startFrom"),
+    startTo: get("startTo"),
+    completionFrom: get("completionFrom"),
+    completionTo: get("completionTo"),
+    agreementReference: get("agreementReference")?.trim() || undefined,
+    archived: get("archived") === "include" || get("archived") === "only" ? (get("archived") as "include" | "only") : undefined,
+    preset: isSearchPreset(get("preset")) ? (get("preset") as SearchPreset) : undefined,
   };
 }
 
@@ -75,6 +124,16 @@ function buildSqlConditions(filters: ConsultancySearchFilters, scopeDepartmentId
   if (filters.ipInvolvement !== undefined) conditions.push(eq(consultancies.ipAgreementRequired, filters.ipInvolvement));
   if (filters.resourceUsage !== undefined) conditions.push(eq(consultancies.caiasResourcesRequired, filters.resourceUsage));
   if (filters.clientName) conditions.push(ilike(clients.organizationName, `%${filters.clientName}%`));
+  if (filters.clientTypeCode) conditions.push(eq(clients.organizationTypeCode, filters.clientTypeCode));
+  if (filters.consultancyCategoryCode) conditions.push(eq(consultancies.consultancyCategoryCode, filters.consultancyCategoryCode));
+  if (filters.startFrom) conditions.push(gte(consultancies.startDate, filters.startFrom));
+  if (filters.startTo) conditions.push(lte(consultancies.startDate, filters.startTo));
+  if (filters.completionFrom) conditions.push(gte(consultancies.currentCompletionDate, filters.completionFrom));
+  if (filters.completionTo) conditions.push(lte(consultancies.currentCompletionDate, filters.completionTo));
+  if (filters.agreementReference) conditions.push(ilike(agreements.agreementNumber, `%${filters.agreementReference}%`));
+  if (filters.preset) conditions.push(presetCondition(filters.preset));
+  if (filters.archived === "only") conditions.push(isNotNull(consultancies.archivedAt));
+  else if (filters.archived !== "include") conditions.push(isNull(consultancies.archivedAt));
   return conditions;
 }
 
@@ -98,6 +157,7 @@ export async function searchConsultancies(
     .select({ ...getTableColumns(consultancies), clientOrganizationName: clients.organizationName })
     .from(consultancies)
     .leftJoin(clients, eq(clients.consultancyId, consultancies.id))
+    .leftJoin(agreements, eq(agreements.consultancyId, consultancies.id))
     .where(where)
     .orderBy(desc(consultancies.createdAt));
 
@@ -108,6 +168,7 @@ export async function searchConsultancies(
         .select({ total: count() })
         .from(consultancies)
         .leftJoin(clients, eq(clients.consultancyId, consultancies.id))
+    .leftJoin(agreements, eq(agreements.consultancyId, consultancies.id))
         .where(where),
     ]);
     return { rows, total, page, pageSize };
@@ -131,6 +192,7 @@ export async function searchAllForExport(filters: ConsultancySearchFilters, scop
     .select({ ...getTableColumns(consultancies), clientOrganizationName: clients.organizationName })
     .from(consultancies)
     .leftJoin(clients, eq(clients.consultancyId, consultancies.id))
+    .leftJoin(agreements, eq(agreements.consultancyId, consultancies.id))
     .where(where)
     .orderBy(desc(consultancies.createdAt))
     .limit(EXPORT_MAX_ROWS);

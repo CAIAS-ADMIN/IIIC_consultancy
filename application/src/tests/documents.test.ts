@@ -218,9 +218,17 @@ test("GET /api/consultancies/:id/documents lists every version of every category
   assert.ok(signedAgreementRows.every((r: { uploadedByName: string }) => r.uploadedByName === "Documents Test Faculty"));
   assert.ok(ownerBody.data.every((r: { viewerCanDownload: boolean }) => r.viewerCanDownload === true));
 
-  // An unrelated faculty user sees the same rows (metadata isn't gated) but is flagged unable to download the restricted one.
-  const otherRes = await fetch(`${BASE_URL}/api/consultancies/${consultancyId}/documents`, {
+  // An unrelated faculty user (not on the record, not in its department) can't list the record's documents at all (portal spec §64)…
+  const outsiderRes = await fetch(`${BASE_URL}/api/consultancies/${consultancyId}/documents`, {
     headers: { cookie: otherFacultyCookie },
+  });
+  assert.equal(outsiderRes.status, 404);
+
+  // …while an oversight role that can open the record sees every row, flagged unable to download the restricted one.
+  const hod = await upsertTestUser({ keycloakSub: "test-hod-documents", name: "Documents Test HOD", email: "test.hod.documents@caias.in", roles: ["hod"] });
+  const hodCookie = await createTestSessionCookie({ userId: hod.id, roles: ["hod"], departmentId });
+  const otherRes = await fetch(`${BASE_URL}/api/consultancies/${consultancyId}/documents`, {
+    headers: { cookie: hodCookie },
   });
   const otherBody = await otherRes.json();
   assert.equal(otherBody.data.length, ownerBody.data.length);

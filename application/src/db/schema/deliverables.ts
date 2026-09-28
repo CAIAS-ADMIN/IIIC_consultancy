@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, date, timestamp, index } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, text, date, timestamp, index } from "drizzle-orm/pg-core";
 import { consultancies } from "./consultancies";
 import { milestoneStatusEnum } from "./enums";
 
@@ -9,7 +9,9 @@ export const deliverables = pgTable(
     consultancyId: uuid("consultancy_id")
       .notNull()
       .references(() => consultancies.id, { onDelete: "restrict" }),
-    description: text("description").notNull(),
+    name: varchar("name", { length: 255 }),
+    description: text("description"),
+    responsibleConsultant: varchar("responsible_consultant", { length: 255 }),
     dueDate: date("due_date"),
     status: milestoneStatusEnum("status").notNull().default("not_started"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

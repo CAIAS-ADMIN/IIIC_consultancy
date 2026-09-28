@@ -8,22 +8,53 @@ export type ApprovalChainStage = {
   sequence: number;
 };
 
+/** What a stage's conditions are matched against (spec §50). Optional fields are "unknown", which only matches unconditional rows. */
+export type ApprovalChainInput = {
+  departmentId: string;
+  consultancyAreaCode: string;
+  totalValue: string | number | null;
+  consultancyCategoryCode?: string | null;
+  caiasResourcesRequired?: boolean;
+  /** IP expected, or confidential information involved. */
+  ipOrConfidential?: boolean;
+};
+
+/** Builds the chain input from a consultancy row — every caller uses this so submit, verify, activation and the queue agree. */
+export function approvalChainInputFor(c: {
+  departmentId: string;
+  consultancyAreaCode: string;
+  totalValue: string | null;
+  consultancyCategoryCode: string | null;
+  caiasResourcesRequired: boolean;
+  ipExpected: string | null;
+  ipAgreementRequired: boolean;
+  confidentialInformation: boolean;
+}): ApprovalChainInput {
+  return {
+    departmentId: c.departmentId,
+    consultancyAreaCode: c.consultancyAreaCode,
+    totalValue: c.totalValue,
+    consultancyCategoryCode: c.consultancyCategoryCode,
+    caiasResourcesRequired: c.caiasResourcesRequired,
+    ipOrConfidential: c.ipExpected === "yes" || c.ipAgreementRequired || c.confidentialInformation,
+  };
+}
+
 /**
  * Resolves the ordered, deduplicated chain of required verification/approval
  * stages for a consultancy from `approval_stage_configs` — read at runtime so
  * which roles approve is never hardcoded (per the build plan). A config row
- * applies when its `departmentId`/`consultancyAreaCode` is null (wildcard) or
- * matches, and the consultancy's value falls within [minValue, maxValue]
+ * applies when its `departmentId`/`consultancyAreaCode`/`consultancyCategoryCode`
+ * is null (wildcard) or matches, its resource / IP-confidentiality trigger (if
+ * set) holds, and the consultancy's value falls within [minValue, maxValue]
  * (null bound = unbounded). When more than one matching row targets the same
  * `stage`, the lowest `sequence` wins — config data is assumed sane, not
  * validated for conflicts here.
  */
 export async function resolveApprovalChain(
   executor: Executor,
-  input: { departmentId: string; consultancyAreaCode: string; totalValue: string | number | null }
+  input: ApprovalChainInput
 ): Promise<ApprovalChainStage[]> {
-  const value = input.totalValue == null ? 0 : Number(input.totalValue);
-
   const rows = await executor
     .select()
     .from(approvalStageConfigs)
@@ -54,16 +85,21 @@ type ApprovalStageConfigRow = typeof approvalStageConfigs.$inferSelect;
  */
 export function selectApprovalChain(
   configs: ApprovalStageConfigRow[],
-  input: { departmentId: string; consultancyAreaCode: string; totalValue: string | number | null }
+  input: ApprovalChainInput
 ): ApprovalChainStage[] {
   const value = input.totalValue == null ? 0 : Number(input.totalValue);
+  const hasDeptSpecific = configs.some((r) => r.isRequired && r.departmentId === input.departmentId);
 
   const matching = configs
     .filter(
       (row) =>
         row.isRequired &&
-        (row.departmentId == null || row.departmentId === input.departmentId) &&
-        (row.consultancyAreaCode == null || row.consultancyAreaCode === input.consultancyAreaCode)
+        (hasDeptSpecific ? row.departmentId === input.departmentId : row.departmentId == null || row.departmentId === input.departmentId) &&
+        (row.consultancyAreaCode == null || row.consultancyAreaCode === input.consultancyAreaCode) &&
+        (row.consultancyCategoryCode == null || row.consultancyCategoryCode === input.consultancyCategoryCode) &&
+        // "when resources used" / "when IP or confidential" rows apply only when that condition holds.
+        (!row.whenResourcesUsed || input.caiasResourcesRequired === true) &&
+        (!row.whenIpOrConfidential || input.ipOrConfidential === true)
     )
     .filter((row) => {
       const min = row.minValue == null ? -Infinity : Number(row.minValue);

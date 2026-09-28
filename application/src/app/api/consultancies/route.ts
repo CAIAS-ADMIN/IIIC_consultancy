@@ -5,9 +5,10 @@ import { authErrorResponse } from "@/lib/auth/errors";
 import { db } from "@/db";
 import { consultancies } from "@/db/schema";
 import { consultancyStatusEnum, type ConsultancyStatus } from "@/db/schema/enums";
-import { draftConsultancySchema } from "@/lib/validation/consultancy";
+import { createDraftConsultancySchema } from "@/lib/validation/consultancy";
 import { recordAuditEvent } from "@/lib/audit";
 import { resolveDepartmentScope } from "@/lib/consultancy/scope";
+import { resolveRequestedFacultyInCharge } from "@/lib/consultancy/faculty-in-charge";
 
 /**
  * Lists consultancies, optionally filtered by `status` — e.g.
@@ -62,16 +63,28 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json();
-  const parsed = draftConsultancySchema.safeParse(body);
+  // Blank wizard fields arrive as "" — treat them as "not filled in yet".
+  const filled = Object.fromEntries(Object.entries(body ?? {}).filter(([, value]) => value !== ""));
+  const parsed = createDraftConsultancySchema.safeParse(filled);
   if (!parsed.success) {
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
+  }
+  // An admin registering on a faculty member's behalf makes that faculty member the one in charge.
+  const facultyInCharge = await resolveRequestedFacultyInCharge(user, body?.facultyInChargeId);
+  if (facultyInCharge.error) {
+    return Response.json({ error: facultyInCharge.error }, { status: 400 });
   }
 
   const [draft] = await db
     .insert(consultancies)
     .values({
       ...parsed.data,
-      facultyInChargeId: user.id,
+      // NOT NULL columns a brand-new draft may not have yet; later draft saves fill them in.
+      title: parsed.data.title ?? "Untitled draft",
+      consultancyTypeCode: parsed.data.consultancyTypeCode ?? "",
+      teamTypeCode: parsed.data.teamTypeCode ?? "",
+      consultancyAreaCode: parsed.data.consultancyAreaCode ?? "",
+      facultyInChargeId: facultyInCharge.userId ?? user.id,
       createdBy: user.id,
     })
     .returning();

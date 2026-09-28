@@ -1,7 +1,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createTestSessionCookie } from "./helpers/session";
-import { upsertTestUser, upsertTestDepartment, upsertTestApprovalStageConfig, BASE_URL } from "./helpers/fixtures";
+import { upsertTestUser, upsertTestDepartment, upsertTestApprovalStageConfig, BASE_URL, withRegistrationDefaults } from "./helpers/fixtures";
 import { closeDb, db } from "@/db";
 import { documents } from "@/db/schema";
 
@@ -47,7 +47,7 @@ before(async () => {
     roles: ["hod"],
     departmentId: departmentAId,
   });
-  hodACookie = await createTestSessionCookie({ userId: hodA.id, roles: ["hod"] });
+  hodACookie = await createTestSessionCookie({ userId: hodA.id, roles: ["hod"], departmentId: departmentAId });
 
   const systemAdmin = await upsertTestUser({
     keycloakSub: "test-sysadmin-phase12",
@@ -67,7 +67,7 @@ before(async () => {
 });
 
 function validSubmitPayload(departmentId: string, clientName: string, overrides: Record<string, unknown> = {}) {
-  return {
+  return withRegistrationDefaults({
     consultancy: {
       departmentId,
       academicYearCode: "2025-26",
@@ -85,7 +85,7 @@ function validSubmitPayload(departmentId: string, clientName: string, overrides:
     scope: { scopeOfWork: "Build a test integration.", deliverables: [{ description: "Final report" }] },
     resources: { ipAgreementRequired: false, caiasResourcesRequired: false },
     ...overrides,
-  };
+  });
 }
 
 async function createSubmittedConsultancy(

@@ -5,6 +5,7 @@ import { authErrorResponse } from "@/lib/auth/errors";
 import { db } from "@/db";
 import { closures, closureExceptions } from "@/db/schema";
 import { getConsultancyById } from "@/db/queries/consultancies";
+import { isOutOfDepartmentHod } from "@/lib/consultancy/access";
 import { closureExceptionSchema } from "@/lib/validation/closure";
 import { recordAuditEvent } from "@/lib/audit";
 
@@ -29,6 +30,9 @@ export async function POST(
   const consultancy = await getConsultancyById(id);
   if (!consultancy) {
     return Response.json({ error: "Not found" }, { status: 404 });
+  }
+  if (isOutOfDepartmentHod(user, consultancy)) {
+    return Response.json({ error: "Forbidden: HOD can only act on consultancies of their own department" }, { status: 403 });
   }
 
   const closure = await db.query.closures.findFirst({ where: eq(closures.id, closureId) });

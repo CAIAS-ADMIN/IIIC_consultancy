@@ -1,12 +1,11 @@
+import { FileDown } from "lucide-react";
 import { notFound, redirect } from "next/navigation";
 import { eq, asc } from "drizzle-orm";
 import { auth } from "@/auth";
 import { db } from "@/db";
 import {
   departments,
-  consultancyTeamMembers,
   deliverables,
-  consultancyDepartments,
   approvals,
   consultancyVersions,
   progressUpdates,
@@ -21,21 +20,31 @@ import {
   paymentAdjustments,
   closures,
   clientAcceptances,
+  clientFeedback,
+  reopenings,
 } from "@/db/schema";
 import { getConsultancyById, getClientByConsultancyId, getAgreementByConsultancyId } from "@/db/queries/consultancies";
 import { listMasterData } from "@/db/queries/master-data";
 import { listDocumentsForConsultancy } from "@/db/queries/documents";
 import { getConsultancyDerivedFields } from "@/db/queries/consultancy-derived";
-import { resolveApprovalChain } from "@/lib/consultancy/approval-chain";
+import { resolveApprovalChain, approvalChainInputFor } from "@/lib/consultancy/approval-chain";
 import { checkActivationGates } from "@/lib/consultancy/activation";
 import { checkClosureGates } from "@/lib/consultancy/closure-gates";
-import { isConsultancyMember } from "@/lib/consultancy/access";
+import { canViewConsultancy, isConsultancyMember, isOutOfDepartmentHod } from "@/lib/consultancy/access";
+import { SEND_BACK_STATUSES } from "@/lib/validation/lifecycle";
+import { getRegistrationRecord } from "@/db/queries/registration-record";
+import { FINANCIAL_AUDIT_ENTITY_TYPES, listAuditEvents } from "@/db/queries/audit";
+import { RegistrationDetails } from "@/components/consultancy/registration-details";
+import { AuditTrailList } from "@/components/consultancy/audit-trail-list";
+import { DocumentRepository } from "@/components/documents/document-repository";
+import { FinanceClosurePanel } from "@/components/closure/finance-closure-panel";
+import { RecordAdminActions } from "@/components/consultancy/record-admin-actions";
+import { ARCHIVABLE_STATUSES } from "@/lib/validation/lifecycle";
 import { getFinancialSummary } from "@/lib/consultancy/financials";
 import { FLAGGABLE_FIELDS } from "@/lib/consultancy/flaggable-fields";
 import { PageHeader } from "@/components/shell/page-header";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { CollapsibleSection } from "@/components/ui/collapsible-section";
-import { DocumentCategoryPanel } from "@/components/documents/document-category-panel";
 import { VerificationActions } from "@/components/verification/verification-actions";
 import { ClarificationEditor } from "@/components/verification/clarification-editor";
 import { ActivationPanel } from "@/components/consultancy/activation-panel";
@@ -52,7 +61,7 @@ import { PaymentAdjustmentsPanel } from "@/components/financials/payment-adjustm
 import { PaymentComparisonView } from "@/components/financials/payment-comparison-view";
 import { ClosureGateChecklist } from "@/components/closure/closure-gate-checklist";
 import { ClosureExceptionForm } from "@/components/closure/closure-exception-form";
-import { ClientAcceptanceForm } from "@/components/closure/client-acceptance-form";
+import { ClientFeedbackPanel } from "@/components/closure/client-acceptance-form";
 import { RequestClosureDialog } from "@/components/closure/request-closure-dialog";
 import { ClosureVerifyActions } from "@/components/closure/closure-verify-actions";
 import Link from "next/link";
@@ -60,19 +69,23 @@ import { formatInr } from "@/lib/format";
 import type { Role } from "@/db/schema/enums";
 
 const VERIFIABLE_STATUSES = ["submitted", "under_verification"];
-const FIXED_DOCUMENT_CATEGORIES = ["Signed Agreement", "NDA", "IP Agreement"];
 const ACTIVATED_STATUSES = ["active", "on_hold", "extension_requested", "delayed", "closure_requested", "completed_closed"];
 /** Matches `cancel`/`terminate` routes' own `TERMINAL_STATUSES` exactly. */
 const CANCEL_TERMINATE_BLOCKED_STATUSES = ["cancelled", "terminated", "completed_closed", "rejected", "draft"];
 
 const SECTION_NAV = [
   { id: "overview", label: "Overview" },
-  { id: "team-agreement", label: "Team & Agreement" },
-  { id: "financials", label: "Financials" },
+  { id: "registration", label: "Registration Details" },
+  { id: "financials", label: "Payments" },
   { id: "documents", label: "Documents" },
   { id: "progress-milestones", label: "Progress & Milestones" },
+  { id: "client-feedback", label: "Client Feedback" },
   { id: "history", label: "History" },
+  { id: "audit-trail", label: "Audit Trail" },
 ];
+
+/** Statuses in which client acceptance / feedback can be recorded. */
+const FEEDBACK_STATUSES = ["active", "delayed", "closure_requested", "completed_closed"];
 
 function ReviewRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -101,7 +114,9 @@ export default async function ConsultancyDetailPage({ params }: { params: Promis
   }
 
   const isOwner = consultancy.createdBy === session.user.id || consultancy.facultyInChargeId === session.user.id;
-  const isElevated = session.user.roles.some((r) => ["hod", "iiic_admin", "system_admin"].includes(r));
+  const isElevated =
+    session.user.roles.some((r) => ["iiic_admin", "system_admin"].includes(r)) ||
+    (session.user.roles.includes("hod") && Boolean(session.user.departmentId) && session.user.departmentId === consultancy.departmentId);
 
   // Phase 3's one addition ahead of this phase: a still-draft record redirects
   // its owner straight back into the registration wizard instead of a dead
@@ -121,13 +136,14 @@ export default async function ConsultancyDetailPage({ params }: { params: Promis
     roles: session.user.roles,
     departmentId: session.user.departmentId,
   };
+  if (!(await canViewConsultancy(authedUser, consultancy))) {
+    notFound();
+  }
 
   const [
     client,
     agreement,
-    teamMembers,
     deliverableRows,
-    departmentsInvolvedRows,
     mainDepartment,
     masterDataRows,
     documentRows,
@@ -140,9 +156,7 @@ export default async function ConsultancyDetailPage({ params }: { params: Promis
   ] = await Promise.all([
     getClientByConsultancyId(id),
     getAgreementByConsultancyId(id),
-    db.query.consultancyTeamMembers.findMany({ where: eq(consultancyTeamMembers.consultancyId, id) }),
     db.query.deliverables.findMany({ where: eq(deliverables.consultancyId, id) }),
-    db.query.consultancyDepartments.findMany({ where: eq(consultancyDepartments.consultancyId, id) }),
     db.query.departments.findFirst({ where: eq(departments.id, consultancy.departmentId) }),
     listMasterData(),
     listDocumentsForConsultancy(id),
@@ -153,11 +167,15 @@ export default async function ConsultancyDetailPage({ params }: { params: Promis
       .select({
         id: milestones.id,
         title: milestones.title,
+        description: milestones.description,
+        startDate: milestones.startDate,
         plannedDate: milestones.plannedDate,
+        actualStartDate: milestones.actualStartDate,
         actualDate: milestones.actualDate,
         status: milestones.status,
         remarks: milestones.remarks,
         responsibleName: users.name,
+        responsiblePerson: milestones.responsiblePerson,
       })
       .from(milestones)
       .leftJoin(users, eq(users.id, milestones.responsibleConsultantId))
@@ -181,10 +199,23 @@ export default async function ConsultancyDetailPage({ params }: { params: Promis
     db.query.paymentAdjustments.findMany({ where: eq(paymentAdjustments.consultancyId, id), orderBy: (row, { desc }) => [desc(row.createdAt)] }),
   ]);
 
-  const [closureRows, clientAcceptanceRows] = await Promise.all([
+  const [closureRows, clientAcceptanceRows, feedbackRows, registrationRecord, reopeningRows] = await Promise.all([
     db.query.closures.findMany({ where: eq(closures.consultancyId, id), orderBy: (row, { desc }) => [desc(row.createdAt)] }),
-    db.query.clientAcceptances.findMany({ where: eq(clientAcceptances.consultancyId, id) }),
+    db.query.clientAcceptances.findMany({ where: eq(clientAcceptances.consultancyId, id), orderBy: (row, { desc }) => [desc(row.createdAt)] }),
+    db.query.clientFeedback.findMany({ where: eq(clientFeedback.consultancyId, id), orderBy: (row, { desc }) => [desc(row.createdAt)] }),
+    getRegistrationRecord(id),
+    db.query.reopenings.findMany({ where: eq(reopenings.consultancyId, id), orderBy: (row, { desc }) => [desc(row.createdAt)] }),
   ]);
+
+  // Audit trail scope: oversight roles see everything; Finance sees the financial
+  // trail; faculty (the record's own team included) don't get an audit section.
+  const roles = session.user.roles;
+  const seesFullAudit = roles.some((r) => ["hod", "iiic_admin", "competent_authority", "system_admin", "audit_readonly"].includes(r));
+  const seesFinancialAudit = !seesFullAudit && roles.includes("finance");
+  const auditEventsForRecord =
+    seesFullAudit || seesFinancialAudit
+      ? (await listAuditEvents({ consultancyId: id, entityTypes: seesFinancialAudit ? FINANCIAL_AUDIT_ENTITY_TYPES : undefined }, { limit: 200, offset: 0 })).rows
+      : null;
   const pendingClosure = closureRows.find((c) => c.status === "requested") ?? null;
   const closureGate = pendingClosure ? await checkClosureGates(consultancy, pendingClosure) : null;
 
@@ -193,21 +224,23 @@ export default async function ConsultancyDetailPage({ params }: { params: Promis
     (masterData[row.category] ??= []).push({ code: row.code, label: row.label });
   }
 
-  const extraDocumentCategories = [...new Set(documentRows.map((d) => d.documentCategory))].filter(
-    (c) => !FIXED_DOCUMENT_CATEGORIES.includes(c)
-  );
+  const existingDocumentCategories = [...new Set(documentRows.map((d) => d.documentCategory))];
+  const pinnedDocumentCategories = [
+    "Signed Agreement",
+    ...(consultancy.ndaRequired ? ["NDA"] : []),
+    ...(consultancy.ipAgreementRequired ? ["IP Agreement"] : []),
+  ];
 
   let requiredRole: Role | null = null;
   if (VERIFIABLE_STATUSES.includes(consultancy.status)) {
-    const chain = await resolveApprovalChain(db, {
-      departmentId: consultancy.departmentId,
-      consultancyAreaCode: consultancy.consultancyAreaCode,
-      totalValue: consultancy.totalValue,
-    });
+    const chain = await resolveApprovalChain(db, approvalChainInputFor(consultancy));
     const currentStage = chain.find((s) => s.stage === consultancy.workflowStage);
     requiredRole = (currentStage?.approverRole as Role) ?? null;
   }
-  const canAct = requiredRole !== null && (session.user.roles.includes(requiredRole) || session.user.roles.includes("system_admin"));
+  const canAct =
+    requiredRole !== null &&
+    (session.user.roles.includes(requiredRole) || session.user.roles.some((r) => ["iiic_admin", "system_admin"].includes(r))) &&
+    !isOutOfDepartmentHod(authedUser, consultancy);
 
   const canActivate = session.user.roles.some((r) => ["iiic_admin", "system_admin"].includes(r));
   const activationGate = consultancy.status === "registered" && canActivate ? await checkActivationGates(consultancy) : null;
@@ -230,11 +263,13 @@ export default async function ConsultancyDetailPage({ params }: { params: Promis
     ["finance", "hod", "iiic_admin", "competent_authority", "system_admin"].includes(r)
   );
   const canVerifyClosure = session.user.roles.some((r) => ["iiic_admin", "system_admin"].includes(r));
-  const needsClientAcceptance =
-    consultancy.clientAcceptanceRequired &&
-    clientAcceptanceRows.length === 0 &&
-    ["active", "closure_requested"].includes(consultancy.status) &&
-    canRecordProgress;
+  const canRecordAcceptance = ["active", "closure_requested"].includes(consultancy.status) && canRecordProgress;
+  const canRecordFeedback = FEEDBACK_STATUSES.includes(consultancy.status) && canRecordProgress;
+  const isFinance = session.user.roles.includes("finance");
+  const isCaiasAdmin = session.user.roles.some((r) => ["iiic_admin", "system_admin"].includes(r));
+  const canReopen = isCaiasAdmin && !consultancy.archivedAt && ["rejected", "completed_closed"].includes(consultancy.status);
+  const canArchive = isCaiasAdmin && (ARCHIVABLE_STATUSES as readonly string[]).includes(consultancy.status);
+  const canSendBack = isCaiasAdmin && (SEND_BACK_STATUSES as readonly string[]).includes(consultancy.status);
   const pendingExtension = extensionRows.find((e) => e.status === "requested") ?? null;
   const openHold = holdRows.find((h) => h.actualResumeDate === null) ?? null;
   const terminalRecord = cancellationRows[0]
@@ -264,6 +299,15 @@ export default async function ConsultancyDetailPage({ params }: { params: Promis
         />
       )}
 
+      {consultancy.archivedAt && (
+        <div role="status" className="rounded-md bg-status-neutral-bg p-3 text-sm text-status-neutral-fg">
+          Archived on {new Date(consultancy.archivedAt).toLocaleDateString("en-IN")}
+          {consultancy.archiveReason && ` — ${consultancy.archiveReason}`}. The record remains fully available for audit.
+        </div>
+      )}
+
+      <RecordAdminActions consultancyId={id} canSendBack={canSendBack} canReopen={canReopen} canArchive={canArchive} isArchived={Boolean(consultancy.archivedAt)} />
+
       {canAct && requiredRole && <VerificationActions consultancyId={id} flaggableFields={FLAGGABLE_FIELDS} />}
 
       {activationGate && <ActivationPanel consultancyId={id} reasons={activationGate.reasons} />}
@@ -292,13 +336,19 @@ export default async function ConsultancyDetailPage({ params }: { params: Promis
         canCancelOrTerminate={canCancelOrTerminate}
       />
 
-      {canRequestClosure && <RequestClosureDialog consultancyId={id} />}
-
-      {needsClientAcceptance && <ClientAcceptanceForm consultancyId={id} />}
+      {canRequestClosure && (
+        <RequestClosureDialog
+          consultancyId={id}
+          startDate={consultancy.startDate}
+          deliverables={deliverableRows.map((d) => ({ id: d.id, name: d.name ?? d.description ?? "Deliverable", dueDate: d.dueDate }))}
+          financial={financialSummary}
+        />
+      )}
 
       {pendingClosure && closureGate && (
         <div className="flex flex-col gap-3">
           {canVerifyClosure && <ClosureVerifyActions consultancyId={id} closureId={pendingClosure.id} gateOk={closureGate.ok} />}
+          {isFinance && <FinanceClosurePanel consultancyId={id} closure={pendingClosure} financial={financialSummary} />}
           <ClosureGateChecklist items={closureGate.items} />
           {!closureGate.items.find((i) => i.key === "financial")?.ok && canAuthoriseException && (
             <ClosureExceptionForm consultancyId={id} closureId={pendingClosure.id} />
@@ -306,11 +356,33 @@ export default async function ConsultancyDetailPage({ params }: { params: Promis
         </div>
       )}
 
-      {(consultancy.status === "completed_closed" || pendingClosure) && (
-        <Link href={`/consultancies/${id}/closure-record`} className="text-sm font-medium text-primary hover:underline">
-          View Closure Record →
-        </Link>
-      )}
+      {/* Each record: view the page, or download it as a letterhead PDF. */}
+      <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm font-medium">
+        {(
+          [
+            ["registration", "Registration Record", true],
+            ["progress", "Progress Record", ACTIVATED_STATUSES.includes(consultancy.status)],
+            ["closure", "Closure Record", consultancy.status === "completed_closed" || Boolean(pendingClosure)],
+          ] as const
+        )
+          .filter(([, , available]) => available)
+          .map(([kind, label]) => (
+            <span key={kind} className="inline-flex min-h-11 items-center gap-2">
+              <Link href={`/consultancies/${id}/${kind}-record`} className="text-primary hover:underline">
+                {label} →
+              </Link>
+              <a
+                href={`/api/consultancies/${id}/records/${kind}`}
+                download
+                className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-xs text-foreground hover:bg-background"
+                aria-label={`Download ${label} as PDF`}
+              >
+                <FileDown className="h-3.5 w-3.5" aria-hidden />
+                PDF
+              </a>
+            </span>
+          ))}
+      </div>
 
       {consultancy.status === "clarification_required" && (
         <ClarificationEditor
@@ -320,13 +392,14 @@ export default async function ConsultancyDetailPage({ params }: { params: Promis
           flaggedFields={consultancy.flaggedFields ?? []}
           currentValues={consultancy as unknown as Record<string, unknown>}
           fieldDefs={FLAGGABLE_FIELDS}
+          masterData={masterData}
         />
       )}
 
       <div className="flex flex-col gap-6 md:flex-row md:items-start">
         <nav className="hidden shrink-0 md:sticky md:top-4 md:block md:w-48">
           <ul className="flex flex-col gap-1">
-            {SECTION_NAV.map((s) => (
+            {SECTION_NAV.filter((s) => s.id !== "audit-trail" || auditEventsForRecord).map((s) => (
               <li key={s.id}>
                 <a
                   href={`#${s.id}`}
@@ -341,93 +414,34 @@ export default async function ConsultancyDetailPage({ params }: { params: Promis
 
         <div className="flex min-w-0 flex-1 flex-col gap-4">
           <CollapsibleSection id="overview" title="Overview">
-            <div>
-              <p className="mb-2 text-sm font-semibold text-foreground">Client</p>
-              <dl>
-                <ReviewRow label="Organization" value={client?.organizationName} />
-                <ReviewRow label="Type" value={masterLabel(masterData.organization_type ?? [], client?.organizationTypeCode)} />
-                <ReviewRow label="Contact" value={client?.contactPersonName} />
-                <ReviewRow label="Designation" value={client?.designation} />
-                <ReviewRow label="Email" value={client?.contactEmail} />
-                <ReviewRow label="Phone" value={client?.contactPhone} />
-                <ReviewRow label="Address" value={client?.address} />
-              </dl>
-            </div>
-            <div>
-              <p className="mb-2 text-sm font-semibold text-foreground">Consultancy Details</p>
-              <dl>
-                <ReviewRow label="Department" value={mainDepartment?.name} />
-                <ReviewRow label="Academic Year" value={masterLabel(masterData.academic_year ?? [], consultancy.academicYearCode)} />
-                <ReviewRow label="Consultancy Type" value={masterLabel(masterData.consultancy_type ?? [], consultancy.consultancyTypeCode)} />
-                <ReviewRow
-                  label="Consultancy Area"
-                  value={
-                    consultancy.consultancyAreaCode === "other"
-                      ? consultancy.consultancyAreaOther
-                      : masterLabel(masterData.consultancy_area ?? [], consultancy.consultancyAreaCode)
-                  }
-                />
-                <ReviewRow label="Start Date" value={consultancy.startDate} />
-                <ReviewRow label="Current Completion Date" value={consultancy.currentCompletionDate} />
-                {consultancy.originalCompletionDate !== consultancy.currentCompletionDate && (
-                  <ReviewRow label="Original Completion Date" value={consultancy.originalCompletionDate} />
-                )}
-                <ReviewRow label="NDA Required" value={consultancy.ndaRequired ? "Yes" : "No"} />
-                <ReviewRow label="IP Agreement Required" value={consultancy.ipAgreementRequired ? "Yes" : "No"} />
-              </dl>
-              {consultancy.description && <p className="mt-3 text-sm text-muted-foreground">{consultancy.description}</p>}
-              <p className="mt-3 text-sm font-medium text-foreground">Scope of Work</p>
-              <p className="text-sm text-muted-foreground">{consultancy.scopeOfWork || "—"}</p>
-              {deliverableRows.length > 0 && (
-                <>
-                  <p className="mt-3 text-sm font-medium text-foreground">Deliverables</p>
-                  <ul className="list-inside list-disc text-sm text-foreground">
-                    {deliverableRows.map((d) => (
-                      <li key={d.id}>
-                        {d.description}
-                        {d.dueDate && <span className="text-muted-foreground"> — due {d.dueDate}</span>}
-                        <span className="text-muted-foreground"> ({d.status.replace(/_/g, " ")})</span>
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              )}
-            </div>
-          </CollapsibleSection>
-
-          <CollapsibleSection id="team-agreement" title="Team & Agreement">
-            {teamMembers.length > 0 && (
-              <ul className="flex flex-col gap-1 text-sm text-foreground">
-                {teamMembers.map((m) => (
-                  <li key={m.id}>
-                    {m.name} — {m.role}
-                    {m.isExternal && <span className="text-muted-foreground"> (external)</span>}
-                  </li>
-                ))}
-              </ul>
-            )}
             <dl>
-              <ReviewRow label="Agreement Type" value={masterLabel(masterData.agreement_type ?? [], agreement?.agreementTypeCode)} />
-              <ReviewRow label="Agreement Number" value={agreement?.agreementNumber} />
-              <ReviewRow label="Agreement Date" value={agreement?.agreementDate} />
-              <ReviewRow label="Payment Terms" value={masterLabel(masterData.payment_terms ?? [], agreement?.paymentTermsCode)} />
-              <ReviewRow label="Payment Mode" value={masterLabel(masterData.payment_mode ?? [], agreement?.paymentModeCode)} />
-              {consultancy.externalExpertInvolved && (
-                <ReviewRow label="External Expert" value={consultancy.externalExpertDetails} />
+              <ReviewRow label="Client" value={client?.organizationName} />
+              <ReviewRow label="Department" value={mainDepartment?.name} />
+              <ReviewRow label="Faculty Consultant" value={registrationRecord?.facultyInCharge?.name} />
+              <ReviewRow label="Academic Year" value={masterLabel(masterData.academic_year ?? [], consultancy.academicYearCode)} />
+              <ReviewRow
+                label="Nature of Consultancy"
+                value={
+                  consultancy.natureOfConsultancyCode === "other"
+                    ? consultancy.natureOfConsultancyOther
+                    : masterLabel(masterData.nature_of_consultancy ?? [], consultancy.natureOfConsultancyCode)
+                }
+              />
+              <ReviewRow label="Consultancy Value" value={consultancy.totalValue ? formatInr(Number(consultancy.totalValue)) : "—"} />
+              <ReviewRow label="Start Date" value={consultancy.startDate} />
+              <ReviewRow label="Current Completion Date" value={consultancy.currentCompletionDate} />
+              {consultancy.originalCompletionDate !== consultancy.currentCompletionDate && (
+                <ReviewRow label="Original Completion Date" value={consultancy.originalCompletionDate} />
               )}
-              {consultancy.rolesAndResponsibilities && (
-                <ReviewRow label="Roles & Responsibilities" value={consultancy.rolesAndResponsibilities} />
-              )}
-              {consultancy.caiasResourcesRequired && <ReviewRow label="CAIAS Resources" value={consultancy.resourceDetails} />}
+              <ReviewRow label="Agreement Reference" value={agreement?.agreementNumber} />
             </dl>
-            {departmentsInvolvedRows.length > 0 && (
-              <p className="text-xs text-muted-foreground">
-                {departmentsInvolvedRows.length} additional department{departmentsInvolvedRows.length === 1 ? "" : "s"} involved
-              </p>
-            )}
           </CollapsibleSection>
 
-          <CollapsibleSection id="financials" title="Financials">
+          <CollapsibleSection id="registration" title="Registration Details">
+            {registrationRecord && <RegistrationDetails record={registrationRecord} />}
+          </CollapsibleSection>
+
+          <CollapsibleSection id="financials" title="Payments">
             <FinancialSummaryCard
               totalValue={financialSummary.totalValue}
               totalReceived={financialSummary.totalReceived}
@@ -471,16 +485,7 @@ export default async function ConsultancyDetailPage({ params }: { params: Promis
           </CollapsibleSection>
 
           <CollapsibleSection id="documents" title="Documents">
-            <DocumentCategoryPanel consultancyId={id} category="Signed Agreement" label="Signed Agreement" required />
-            {consultancy.ndaRequired && (
-              <DocumentCategoryPanel consultancyId={id} category="NDA" label="Non-Disclosure Agreement" />
-            )}
-            {consultancy.ipAgreementRequired && (
-              <DocumentCategoryPanel consultancyId={id} category="IP Agreement" label="IP Agreement" />
-            )}
-            {extraDocumentCategories.map((category) => (
-              <DocumentCategoryPanel key={category} consultancyId={id} category={category} label={category} />
-            ))}
+            <DocumentRepository consultancyId={id} existingCategories={existingDocumentCategories} pinnedCategories={pinnedDocumentCategories} />
           </CollapsibleSection>
 
           <CollapsibleSection id="progress-milestones" title="Progress & Milestones">
@@ -501,17 +506,32 @@ export default async function ConsultancyDetailPage({ params }: { params: Promis
               <p className="mb-2 text-sm font-semibold text-foreground">Milestones</p>
               <MilestonesPanel
                 consultancyId={id}
-                milestones={milestoneRows}
+                milestones={milestoneRows.map(({ responsiblePerson, ...m }) => ({ ...m, responsibleName: m.responsibleName ?? responsiblePerson }))}
                 overdueIds={overdueIds}
                 canManage={consultancy.status === "active" && canRecordProgress}
               />
             </div>
           </CollapsibleSection>
 
+          <CollapsibleSection id="client-feedback" title="Client Feedback">
+            <ClientFeedbackPanel
+              consultancyId={id}
+              acceptances={clientAcceptanceRows}
+              feedback={feedbackRows}
+              canRecordAcceptance={canRecordAcceptance}
+              canRecordFeedback={canRecordFeedback}
+              acceptanceRequired={consultancy.clientAcceptanceRequired}
+            />
+          </CollapsibleSection>
+
           <CollapsibleSection id="history" title="History">
             <div>
               <p className="mb-2 text-sm font-semibold text-foreground">Lifecycle History</p>
-              {extensionRows.length === 0 && holdRows.length === 0 && cancellationRows.length === 0 && terminationRows.length === 0 ? (
+              {extensionRows.length === 0 &&
+              holdRows.length === 0 &&
+              cancellationRows.length === 0 &&
+              terminationRows.length === 0 &&
+              reopeningRows.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No extension, hold, cancellation, or termination events on record.</p>
               ) : (
                 <div className="flex flex-col gap-2">
@@ -544,6 +564,18 @@ export default async function ConsultancyDetailPage({ params }: { params: Promis
                         <span className="text-xs text-muted-foreground">{c.date}</span>
                       </div>
                       <p className="mt-1 text-muted-foreground">{c.reason}</p>
+                    </div>
+                  ))}
+                  {reopeningRows.map((r) => (
+                    <div key={r.id} className="rounded-md border border-border p-3 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-foreground">Reopened</span>
+                        <span className="text-xs text-muted-foreground">{new Date(r.createdAt).toLocaleDateString("en-IN")}</span>
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {r.previousStatus.replace(/_/g, " ")} → {r.newStatus.replace(/_/g, " ")}
+                      </p>
+                      <p className="mt-1 text-muted-foreground">{r.reason}</p>
                     </div>
                   ))}
                   {terminationRows.map((t) => (
@@ -596,6 +628,13 @@ export default async function ConsultancyDetailPage({ params }: { params: Promis
               )}
             </div>
           </CollapsibleSection>
+
+          {auditEventsForRecord && (
+            <CollapsibleSection id="audit-trail" title="Audit Trail">
+              {seesFinancialAudit && <p className="text-xs text-muted-foreground">Showing the financial audit trail (Finance scope).</p>}
+              <AuditTrailList events={auditEventsForRecord} />
+            </CollapsibleSection>
+          )}
         </div>
       </div>
     </div>

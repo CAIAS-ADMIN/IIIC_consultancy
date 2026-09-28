@@ -3,6 +3,8 @@ import { db } from "@/db";
 import { consultancies, departments, milestones } from "@/db/schema";
 import type { ConsultancyStatus } from "@/db/schema/enums";
 import { CLOSED_MILESTONE_STATUSES, NOT_OVERDUE_ELIGIBLE_STATUSES } from "./consultancy-derived";
+import { presetCondition } from "@/lib/consultancy/search";
+import { getFinancialSummaries } from "@/lib/consultancy/financials";
 
 const PENDING_VERIFICATION_STATUSES: ConsultancyStatus[] = ["submitted", "under_verification"];
 /** Never signed, so they don't count towards value: a draft has no agreement yet, a rejected one never will. */
@@ -13,6 +15,14 @@ export type OverviewStats = {
   active: number;
   overdueMilestones: number;
   totalValueYtd: number;
+  /** Portal spec §67 CAIAS Admin KPIs. */
+  total: number;
+  approvalPending: number;
+  delayed: number;
+  closurePending: number;
+  financePending: number;
+  amountReceived: number;
+  amountPending: number;
   activeByDepartment: { departmentId: string; departmentName: string; count: number }[];
 };
 
@@ -27,7 +37,14 @@ export async function getOverviewStats(input: { departmentId?: string; academicY
   const inDept = (): SQL | undefined => (input.departmentId ? eq(consultancies.departmentId, input.departmentId) : undefined);
   const today = new Date().toISOString().slice(0, 10);
 
-  const [[pending], [active], [overdue], [valueYtd], byDept] = await Promise.all([
+  const countWhere = (condition: SQL) =>
+    db
+      .select({ n: count() })
+      .from(consultancies)
+      .where(and(condition, inDept()))
+      .then(([row]) => row.n);
+
+  const [[pending], [active], [overdue], [valueYtd], byDept, total, approvalPending, delayed, closurePending, financePending, valued] = await Promise.all([
     db
       .select({ n: count() })
       .from(consultancies)
@@ -65,13 +82,39 @@ export async function getOverviewStats(input: { departmentId?: string; academicY
       .where(and(eq(consultancies.status, "active"), inDept()))
       .groupBy(consultancies.departmentId, departments.name)
       .orderBy(desc(count())),
+    countWhere(notInArray(consultancies.status, ["draft"])),
+    countWhere(presetCondition("approval_pending")),
+    countWhere(eq(consultancies.status, "delayed")),
+    countWhere(presetCondition("closure_pending")),
+    countWhere(presetCondition("finance_pending")),
+    db
+      .select({ id: consultancies.id, totalValue: consultancies.totalValue })
+      .from(consultancies)
+      .where(and(notInArray(consultancies.status, NO_VALUE_STATUSES), inDept())),
   ]);
+
+  // Received / pending across every signed consultancy in scope — the same
+  // per-record financial summary the detail pages and reports use.
+  const summaries = await getFinancialSummaries(valued);
+  let amountReceived = 0;
+  let amountPending = 0;
+  for (const summary of summaries.values()) {
+    amountReceived += summary.totalReceived;
+    amountPending += summary.amountPending;
+  }
 
   return {
     pendingVerification: pending.n,
     active: active.n,
     overdueMilestones: overdue.n,
     totalValueYtd: Number(valueYtd.total ?? 0),
+    total,
+    approvalPending,
+    delayed,
+    closurePending,
+    financePending,
+    amountReceived,
+    amountPending,
     activeByDepartment: byDept.map((d) => ({ departmentId: d.departmentId, departmentName: d.departmentName, count: d.n })),
   };
 }

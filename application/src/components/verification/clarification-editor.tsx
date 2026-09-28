@@ -6,21 +6,39 @@ import { AlertTriangle } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { YesNoToggle } from "@/components/ui/yes-no-toggle";
+import { CheckboxGroup } from "@/components/wizard/field";
 import { useToast } from "@/components/ui/use-toast";
 
 type FieldDef = { field: string; label: string };
-type FieldValue = string | boolean;
+type Option = { code: string; label: string };
+type FieldValue = { kind: "boolean"; value: boolean } | { kind: "text"; value: string } | { kind: "codes"; value: string[] } | { kind: "json"; value: string };
+
+/** Code-list fields and the master-data category that labels their options. */
+const CODE_LIST_CATEGORIES: Record<string, string> = {
+  consultancyDomainCodes: "consultancy_domain",
+  ipTypeCodes: "ip_type",
+  resourceTypeCodes: "resource_type",
+};
+
+function toFieldValue(field: string, raw: unknown): FieldValue {
+  if (typeof raw === "boolean") return { kind: "boolean", value: raw };
+  if (Array.isArray(raw) && (field in CODE_LIST_CATEGORIES || raw.every((v) => typeof v === "string"))) {
+    return { kind: "codes", value: raw as string[] };
+  }
+  if (raw !== null && typeof raw === "object") return { kind: "json", value: JSON.stringify(raw, null, 2) };
+  return { kind: "text", value: raw == null ? "" : String(raw) };
+}
 
 /**
  * Shown on a `clarification_required` consultancy: the flagged fields only
  * (the backend's own `PATCH` rejects anything else at this status), each
- * rendered with the right widget for its actual current type (boolean ->
- * Yes/No toggle, everything else -> text) rather than one generic input.
- * Save & Resubmit does the two real calls in sequence — PATCH the flagged
- * fields, then POST resubmit — so both must succeed for the record to
- * actually re-enter verification.
+ * with a widget for its actual type — Yes/No for booleans, a checklist for
+ * code lists, JSON for structured lists, text otherwise. Only changed fields
+ * are sent; Save & Resubmit PATCHes them, then POSTs resubmit — both must
+ * succeed for the record to re-enter verification.
  */
 export function ClarificationEditor({
   consultancyId,
@@ -29,6 +47,7 @@ export function ClarificationEditor({
   flaggedFields,
   currentValues,
   fieldDefs,
+  masterData = {},
 }: {
   consultancyId: string;
   canEdit: boolean;
@@ -36,33 +55,60 @@ export function ClarificationEditor({
   flaggedFields: string[];
   currentValues: Record<string, unknown>;
   fieldDefs: FieldDef[];
+  masterData?: Record<string, Option[]>;
 }) {
   const router = useRouter();
   const { toast } = useToast();
-  const [values, setValues] = React.useState<Record<string, FieldValue>>(() => {
-    const initial: Record<string, FieldValue> = {};
-    for (const field of flaggedFields) {
-      const raw = currentValues[field];
-      initial[field] = typeof raw === "boolean" ? raw : raw == null ? "" : String(raw);
-    }
-    return initial;
-  });
+  const initial = React.useMemo(
+    () => Object.fromEntries(flaggedFields.map((field) => [field, toFieldValue(field, currentValues[field])])) as Record<string, FieldValue>,
+    [flaggedFields, currentValues]
+  );
+  const [values, setValues] = React.useState<Record<string, FieldValue>>(initial);
   const [saving, setSaving] = React.useState(false);
 
   const labelFor = (field: string) => fieldDefs.find((f) => f.field === field)?.label ?? field;
+  const set = (field: string, value: FieldValue) => setValues((prev) => ({ ...prev, [field]: value }));
+
+  function changedPayload(): Record<string, unknown> | string {
+    const payload: Record<string, unknown> = {};
+    for (const field of flaggedFields) {
+      const now = values[field];
+      if (JSON.stringify(now) === JSON.stringify(initial[field])) continue;
+      if (now.kind === "json") {
+        try {
+          payload[field] = JSON.parse(now.value);
+        } catch {
+          return `${labelFor(field)} is not valid JSON`;
+        }
+      } else if (now.kind === "text") {
+        // An emptied optional field is cleared, not stored as "".
+        payload[field] = now.value.trim() === "" ? null : now.value;
+      } else {
+        payload[field] = now.value;
+      }
+    }
+    return payload;
+  }
 
   async function handleResubmit() {
+    const payload = changedPayload();
+    if (typeof payload === "string") {
+      toast({ title: "Check the highlighted field", description: payload, variant: "destructive" });
+      return;
+    }
     setSaving(true);
     try {
-      const patchRes = await fetch(`/api/consultancies/${consultancyId}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(values),
-      });
-      if (!patchRes.ok) {
-        const body = await patchRes.json().catch(() => ({}));
-        toast({ title: "Could not save changes", description: String(body.error ?? ""), variant: "destructive" });
-        return;
+      if (Object.keys(payload).length > 0) {
+        const patchRes = await fetch(`/api/consultancies/${consultancyId}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!patchRes.ok) {
+          const body = await patchRes.json().catch(() => ({}));
+          toast({ title: "Could not save changes", description: String(body.error ?? ""), variant: "destructive" });
+          return;
+        }
       }
       const resubmitRes = await fetch(`/api/consultancies/${consultancyId}/resubmit`, { method: "POST" });
       if (!resubmitRes.ok) {
@@ -93,21 +139,36 @@ export function ClarificationEditor({
             <div className="grid gap-4 sm:grid-cols-2">
               {flaggedFields.map((field) => {
                 const value = values[field];
+                const wide = value.kind === "codes" || value.kind === "json";
                 return (
-                  <div key={field} className="flex flex-col gap-1.5">
+                  <div key={field} className={wide ? "flex flex-col gap-1.5 sm:col-span-2" : "flex flex-col gap-1.5"}>
                     <Label htmlFor={`clarify-${field}`}>{labelFor(field)}</Label>
-                    {typeof value === "boolean" ? (
-                      <YesNoToggle
-                        name={field}
-                        value={value}
-                        onChange={(v) => setValues((prev) => ({ ...prev, [field]: v }))}
+                    {value.kind === "boolean" && (
+                      <YesNoToggle name={labelFor(field)} value={value.value} onChange={(v) => set(field, { kind: "boolean", value: v })} />
+                    )}
+                    {value.kind === "codes" && (
+                      <CheckboxGroup
+                        idPrefix={`clarify-${field}`}
+                        label={labelFor(field)}
+                        options={
+                          masterData[CODE_LIST_CATEGORIES[field]] ??
+                          value.value.map((code) => ({ code, label: code }))
+                        }
+                        value={value.value}
+                        onChange={(v) => set(field, { kind: "codes", value: v })}
                       />
-                    ) : (
-                      <Input
+                    )}
+                    {value.kind === "json" && (
+                      <Textarea
                         id={`clarify-${field}`}
-                        value={value}
-                        onChange={(e) => setValues((prev) => ({ ...prev, [field]: e.target.value }))}
+                        rows={6}
+                        className="font-mono text-xs"
+                        value={value.value}
+                        onChange={(e) => set(field, { kind: "json", value: e.target.value })}
                       />
+                    )}
+                    {value.kind === "text" && (
+                      <Input id={`clarify-${field}`} value={value.value} onChange={(e) => set(field, { kind: "text", value: e.target.value })} />
                     )}
                   </div>
                 );
@@ -118,9 +179,7 @@ export function ClarificationEditor({
             </Button>
           </>
         ) : (
-          <p className="text-sm text-status-warning-fg">
-            Only the record&apos;s owner can edit and resubmit these fields.
-          </p>
+          <p className="text-sm text-status-warning-fg">Only the record&apos;s owner can edit and resubmit these fields.</p>
         )}
       </CardContent>
     </Card>

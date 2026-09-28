@@ -23,7 +23,19 @@ export type ProgressUpdateRow = {
   overallProgressPercent: number;
   workCompleted: string | null;
   workInProgress: string | null;
+  pendingActivities: string | null;
+  challenges: string | null;
+  correctiveAction: string | null;
+  nextPlannedActivity: string | null;
 };
+
+/** Screen 17's optional narrative fields, in display order. */
+const OPTIONAL_FIELDS = [
+  ["pendingActivities", "Pending Activities"],
+  ["challenges", "Challenges / Issues"],
+  ["correctiveAction", "Corrective Action"],
+  ["nextPlannedActivity", "Next Planned Activity"],
+] as const;
 
 const emptyForm = {
   reportDate: "",
@@ -33,6 +45,10 @@ const emptyForm = {
   overallProgressPercent: "",
   workCompleted: "",
   workInProgress: "",
+  pendingActivities: "",
+  challenges: "",
+  correctiveAction: "",
+  nextPlannedActivity: "",
 };
 
 export function ProgressUpdatesPanel({
@@ -59,8 +75,10 @@ export function ProgressUpdatesPanel({
         body: JSON.stringify({
           ...form,
           overallProgressPercent: Number(form.overallProgressPercent),
-          workCompleted: form.workCompleted || undefined,
-          workInProgress: form.workInProgress || undefined,
+          pendingActivities: form.pendingActivities || undefined,
+          challenges: form.challenges || undefined,
+          correctiveAction: form.correctiveAction || undefined,
+          nextPlannedActivity: form.nextPlannedActivity || undefined,
         }),
       });
       if (!res.ok) {
@@ -134,20 +152,32 @@ export function ProgressUpdatesPanel({
               />
             </Field>
           </div>
-          <Field label="Work Completed" htmlFor="pu-completed">
+          <Field label="Work Completed" htmlFor="pu-completed" required>
             <Textarea
               id="pu-completed"
+              required
               value={form.workCompleted}
               onChange={(e) => setForm((f) => ({ ...f, workCompleted: e.target.value }))}
             />
           </Field>
-          <Field label="Work In Progress" htmlFor="pu-inprogress">
+          <Field label="Work In Progress" htmlFor="pu-inprogress" required>
             <Textarea
               id="pu-inprogress"
+              required
               value={form.workInProgress}
               onChange={(e) => setForm((f) => ({ ...f, workInProgress: e.target.value }))}
             />
           </Field>
+          <div className="grid gap-4 sm:grid-cols-2">
+            {OPTIONAL_FIELDS.map(([key, label]) => (
+              <Field key={key} label={label} htmlFor={`pu-${key}`}>
+                <Textarea id={`pu-${key}`} rows={2} value={form[key]} onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))} />
+              </Field>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Attach progress reports, meeting minutes, deliverables or client communication in Documents → Execution.
+          </p>
           <Button type="submit" disabled={saving} className="w-fit">
             {saving ? "Saving…" : "Record Progress Update"}
           </Button>
@@ -168,8 +198,22 @@ export function ProgressUpdatesPanel({
             <p className="mt-1 text-xs text-muted-foreground">
               Period: {u.reportingPeriodStart} – {u.reportingPeriodEnd}
             </p>
-            {u.workCompleted && <p className="mt-2 text-sm text-foreground">{u.workCompleted}</p>}
-            {u.workInProgress && <p className="mt-1 text-sm text-muted-foreground">{u.workInProgress}</p>}
+            <dl className="mt-2 flex flex-col gap-1 text-sm">
+              {(
+                [
+                  ["Work Completed", u.workCompleted],
+                  ["Work In Progress", u.workInProgress],
+                  ...OPTIONAL_FIELDS.map(([key, label]) => [label, u[key]] as const),
+                ] as const
+              )
+                .filter(([, value]) => value)
+                .map(([label, value]) => (
+                  <div key={label}>
+                    <dt className="text-xs font-medium text-muted-foreground">{label}</dt>
+                    <dd className="whitespace-pre-line text-foreground">{value}</dd>
+                  </div>
+                ))}
+            </dl>
           </div>
         ))}
       </div>

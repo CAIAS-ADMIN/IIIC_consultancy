@@ -1,20 +1,60 @@
-import { and, eq, arrayContains } from "drizzle-orm";
+import { and, eq, arrayContains, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import type { Executor } from "@/db";
 import { notifications, users } from "@/db/schema";
 import type { Role } from "@/db/schema/enums";
+import { emailNotificationsEnabled, sendNotificationEmail } from "./email";
 
 type NotificationChannel = "portal" | "email";
 
+function subjectFor(type: string): string {
+  const readable = type.replace(/_/g, " ");
+  return `CAIAS Consultancy Portal — ${readable.charAt(0).toUpperCase()}${readable.slice(1)}`;
+}
+
 /**
- * Stub delivery for non-portal channels — logs instead of actually sending,
- * per the plan's explicit "can be stubbed/logged in this phase" allowance.
- * The notification row and trigger logic are the priority, not the wire.
+ * Official-email copy of a notification (spec §60), when the email channel
+ * is switched on. Fire-and-forget: it never delays or fails the action that
+ * raised it, and the portal notification row is the record of delivery.
+ *
+ * Most notifications are raised inside a route's transaction, so the mail is
+ * held until the notification row is visible outside it (i.e. committed) —
+ * an action that rolls back after notifying must not email anyone.
  */
-async function deliverIfNeeded(channel: NotificationChannel, message: string) {
-  if (channel === "email") {
-    console.log(`[notifications] would send email: ${message}`);
+async function emailCopies(
+  executor: Executor,
+  rows: { id: string; userId: string | null }[],
+  input: { type: string; message: string; consultancyId?: string | null }
+) {
+  if (!emailNotificationsEnabled() || rows.length === 0) return;
+  const recipients = await executor
+    .select({ id: users.id, email: users.email })
+    .from(users)
+    .where(inArray(users.id, rows.map((r) => r.userId).filter((id): id is string => Boolean(id))));
+  if (recipients.length === 0) return;
+
+  const portalUrl = (process.env.NEXTAUTH_URL ?? "").replace(/\/$/, "");
+  const link = portalUrl ? (input.consultancyId ? `${portalUrl}/consultancies/${input.consultancyId}` : portalUrl) : "";
+  const text = `${input.message}${link ? `
+
+Open in the CAIAS Consultancy Portal: ${link}` : ""}`;
+
+  void (async () => {
+    if (executor !== db && !(await committed(rows[0].id))) return;
+    for (const { email } of recipients) {
+      if (email) await sendNotificationEmail({ to: email, subject: subjectFor(input.type), text });
+    }
+  })();
+}
+
+/** Waits (up to ~15s) for a notification row inserted in a transaction to be committed. */
+async function committed(notificationId: string): Promise<boolean> {
+  for (let attempt = 0; attempt < 30; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const [row] = await db.select({ id: notifications.id }).from(notifications).where(eq(notifications.id, notificationId));
+    if (row) return true;
   }
+  return false;
 }
 
 /** Notifies a single user, inserting one row they can mark read independently. */
@@ -34,7 +74,7 @@ export async function notifyUser(
       sentAt: new Date(),
     })
     .returning();
-  await deliverIfNeeded(channel, input.message);
+  await emailCopies(executor, [row], input);
   return row;
 }
 
@@ -56,14 +96,14 @@ export async function notifyRole(
   },
   executor: Executor = db
 ) {
-  const scopeToDepartment = input.role === "hod" && input.departmentId;
+  const scopeToDepartment = input.role === "hod" && Boolean(input.departmentId);
   const recipients = await executor
     .select({ id: users.id })
     .from(users)
     .where(
       scopeToDepartment
-        ? and(arrayContains(users.roles, [input.role]), eq(users.departmentId, input.departmentId!))
-        : arrayContains(users.roles, [input.role])
+        ? and(sql`${input.role}::role = ANY(${users.roles})`, eq(users.departmentId, input.departmentId!))
+        : sql`${input.role}::role = ANY(${users.roles})`
     );
 
   const channel = input.channel ?? "portal";
@@ -83,6 +123,7 @@ export async function notifyRole(
         .returning()
     )
   );
-  await deliverIfNeeded(channel, input.message);
-  return rows.flat();
+  const inserted = rows.flat();
+  await emailCopies(executor, inserted, input);
+  return inserted;
 }

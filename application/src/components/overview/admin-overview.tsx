@@ -96,9 +96,21 @@ function TileLink({ href, children }: { href: string; children: React.ReactNode 
 /**
  * Admin Overview — the reference "Admin / IIIC Office View" screen for every
  * oversight role. `departmentId` comes from the page's `?department=` param
- * (already validated against real departments by the caller).
+ * (already validated against real departments by the caller) — or, for a
+ * department-scoped role (HOD), is pinned to their own department, in which
+ * case `departmentLocked` hides the switcher.
  */
-export async function AdminOverview({ roles, departmentId }: { roles: Role[]; departmentId?: string }) {
+export async function AdminOverview({
+  roles,
+  departmentId,
+  userDepartmentId,
+  departmentLocked = false,
+}: {
+  roles: Role[];
+  departmentId?: string;
+  userDepartmentId?: string | null;
+  departmentLocked?: boolean;
+}) {
   const isApprover = roles.some((r) => APPROVER_ROLES.includes(r));
   const currentYearRow = await getCurrentAcademicYear();
   const academicYear = currentYearRow?.code ?? getCurrentAcademicYearCode();
@@ -110,7 +122,7 @@ export async function AdminOverview({ roles, departmentId }: { roles: Role[]; de
       .from(departments)
       .where(eq(departments.isActive, true))
       .orderBy(asc(departments.name)),
-    isApprover ? getVerificationQueue({ roles }) : Promise.resolve([] as VerificationQueueItem[]),
+    isApprover ? getVerificationQueue({ roles, departmentId: userDepartmentId }) : Promise.resolve([] as VerificationQueueItem[]),
     isApprover
       ? Promise.resolve([] as RecentRow[])
       : db
@@ -133,7 +145,8 @@ export async function AdminOverview({ roles, departmentId }: { roles: Role[]; de
 
   const scopedQueue = departmentId ? queue.filter((q) => q.departmentId === departmentId) : queue;
   const departmentName = deptOptions.find((d) => d.id === departmentId)?.name;
-  const deptQuery = departmentId ? `&department=${departmentId}` : "";
+  // A pinned department is already enforced server-side on every list, so links needn't carry it.
+  const deptQuery = departmentId && !departmentLocked ? `&department=${departmentId}` : "";
 
   const top = stats.activeByDepartment.slice(0, TOP_DEPARTMENTS);
   const othersCount = stats.activeByDepartment.slice(TOP_DEPARTMENTS).reduce((acc, d) => acc + d.count, 0);
@@ -145,9 +158,9 @@ export async function AdminOverview({ roles, departmentId }: { roles: Role[]; de
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        title="Admin Overview"
-        subtitle={`${departmentName ?? "Institution-wide"} · Academic Year ${academicYear}`}
-        action={<DepartmentSwitcher departments={deptOptions} />}
+        title={departmentLocked ? "Department Overview" : "Admin Overview"}
+        subtitle={`${departmentName ?? (departmentLocked ? "No department on record" : "Institution-wide")} · Academic Year ${academicYear}`}
+        action={departmentLocked ? undefined : <DepartmentSwitcher departments={deptOptions} />}
       />
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
@@ -161,6 +174,17 @@ export async function AdminOverview({ roles, departmentId }: { roles: Role[]; de
         <TileLink href={`/consultancies?academicYearCode=${academicYear}${deptQuery}`}>
           <StatTile label={`Total Value ${academicYear}`} value={formatInrCompact(stats.totalValueYtd)} tone="primary" />
         </TileLink>
+      </div>
+
+      {/* Portal spec §67 CAIAS Admin KPIs — each drills down to the matching list. */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
+        <StatTile size="sm" label="Total Consultancies" value={stats.total} href={`/consultancies?${deptQuery.slice(1)}`} />
+        <StatTile size="sm" label="Approval Pending" value={stats.approvalPending} tone={stats.approvalPending > 0 ? "accent" : "neutral"} href={`/consultancies?preset=approval_pending${deptQuery}`} />
+        <StatTile size="sm" label="Delayed" value={stats.delayed} tone={stats.delayed > 0 ? "danger" : "neutral"} href={`/consultancies?status=delayed${deptQuery}`} />
+        <StatTile size="sm" label="Closure Pending" value={stats.closurePending} tone={stats.closurePending > 0 ? "accent" : "neutral"} href={`/consultancies?preset=closure_pending${deptQuery}`} />
+        <StatTile size="sm" label="Finance Pending" value={stats.financePending} tone={stats.financePending > 0 ? "accent" : "neutral"} href={`/consultancies?preset=finance_pending${deptQuery}`} />
+        <StatTile size="sm" label="Amount Received" value={formatInrCompact(stats.amountReceived)} tone="primary" />
+        <StatTile size="sm" label="Amount Pending" value={formatInrCompact(stats.amountPending)} tone={stats.amountPending > 0 ? "accent" : "neutral"} />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
@@ -195,7 +219,7 @@ export async function AdminOverview({ roles, departmentId }: { roles: Role[]; de
               <CardHeader className="flex flex-row items-center justify-between gap-3">
                 <CardTitle className="text-base">Recent Consultancies</CardTitle>
                 <Link
-                  href={`/consultancies${departmentId ? `?department=${departmentId}` : ""}`}
+                  href={`/consultancies${deptQuery ? `?${deptQuery.slice(1)}` : ""}`}
                   className="inline-flex min-h-11 items-center text-sm font-medium text-primary hover:underline md:min-h-0"
                 >
                   View all →

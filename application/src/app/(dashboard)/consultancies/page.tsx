@@ -8,6 +8,7 @@ import { departments, masterData } from "@/db/schema";
 import { consultancyStatusEnum, type ConsultancyStatus, type Role } from "@/db/schema/enums";
 import { searchConsultancies, type ConsultancySearchFilters } from "@/lib/consultancy/search";
 import { resolveDepartmentParam } from "@/db/queries/departments-param";
+import { canViewAllDepartments, effectiveDepartmentFilter } from "@/lib/consultancy/scope";
 import { isOversightRole } from "@/components/shell/nav-config";
 import { PageHeader } from "@/components/shell/page-header";
 import { ConsultancyListFilters } from "@/components/consultancy/consultancy-list-filters";
@@ -18,12 +19,13 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
 import { formatInr } from "@/lib/format";
 import { Pagination } from "@/components/ui/pagination";
+import { SEARCH_PRESETS, isSearchPreset } from "@/lib/consultancy/search-presets";
 
 const PAGE_SIZE = 20;
 /** Roles the backend lets create a consultancy (same set that gets "New Consultancy" in the nav). */
 const CREATOR_ROLES: Role[] = ["faculty", "hod", "iiic_admin", "system_admin"];
 
-type SearchParams = { q?: string; status?: string; academicYearCode?: string; department?: string; page?: string };
+type SearchParams = { q?: string; status?: string; academicYearCode?: string; department?: string; page?: string; preset?: string; archived?: string };
 type Row = Awaited<ReturnType<typeof searchConsultancies>>["rows"][number];
 
 function first(value: string | string[] | undefined) {
@@ -31,8 +33,9 @@ function first(value: string | string[] | undefined) {
 }
 
 /**
- * "All Consultancies" for oversight roles; "My Consultancies" (only the ones
- * they're in charge of) for faculty. Every filter lives in the URL and is
+ * "All Consultancies" for view-all oversight roles (IIIC admin, finance, …);
+ * "Department Consultancies" for an HOD, pinned to their own department;
+ * "My Consultancies" (only the ones they're in charge of) for faculty. Every filter lives in the URL and is
  * applied server-side through the same `searchConsultancies` the search API
  * and exports use, so this list can never disagree with them.
  */
@@ -51,14 +54,21 @@ export default async function ConsultanciesPage({ searchParams }: { searchParams
     ? (statusParam as ConsultancyStatus)
     : undefined;
   const academicYearCode = first(raw.academicYearCode) || undefined;
-  const departmentId = oversight ? await resolveDepartmentParam(raw.department) : undefined;
+  const viewAll = canViewAllDepartments(session.user);
+  const departmentId = oversight ? effectiveDepartmentFilter(session.user, await resolveDepartmentParam(raw.department)) : undefined;
   const page = Math.max(1, Number.parseInt(first(raw.page) ?? "1", 10) || 1);
+  const presetParam = first(raw.preset);
+  const preset = isSearchPreset(presetParam) ? presetParam : undefined;
+  const archivedParam = first(raw.archived);
+  const archived = archivedParam === "include" || archivedParam === "only" ? archivedParam : undefined;
 
   const filters: ConsultancySearchFilters = {
     q,
     status,
     academicYearCode,
     departmentId,
+    preset,
+    archived,
     ...(oversight ? {} : { facultyInChargeId: session.user.id }),
   };
 
@@ -73,11 +83,11 @@ export default async function ConsultanciesPage({ searchParams }: { searchParams
   ]);
 
   const deptName = new Map(deptOptions.map((d) => [d.id, d.name]));
-  const hasFilters = Boolean(q || status || academicYearCode || departmentId);
+  const hasFilters = Boolean(q || status || academicYearCode || (viewAll && departmentId) || preset || archived);
 
   const pageHref = (target: number) => {
     const params = new URLSearchParams();
-    for (const [key, value] of Object.entries({ q, status, academicYearCode, department: departmentId })) {
+    for (const [key, value] of Object.entries({ q, status, academicYearCode, department: viewAll ? departmentId : undefined, preset, archived })) {
       if (value) params.set(key, value);
     }
     if (target > 1) params.set("page", String(target));
@@ -99,7 +109,7 @@ export default async function ConsultanciesPage({ searchParams }: { searchParams
       ),
     },
     { header: "Client", cell: (r) => r.clientOrganizationName ?? "—" },
-    ...(oversight ? [{ header: "Department", cell: (r: Row) => deptName.get(r.departmentId) ?? "—" }] : []),
+    ...(viewAll ? [{ header: "Department", cell: (r: Row) => deptName.get(r.departmentId) ?? "—" }] : []),
     { header: "Status", cell: (r) => <StatusBadge status={r.status} /> },
     { header: "Year", cell: (r) => r.academicYearCode },
     { header: "Value", className: "md:text-right", cell: (r) => (r.totalValue ? formatInr(Number(r.totalValue)) : "—") },
@@ -125,7 +135,17 @@ export default async function ConsultanciesPage({ searchParams }: { searchParams
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        title={oversight ? "All Consultancies" : "My Consultancies"}
+        title={
+          preset
+            ? SEARCH_PRESETS[preset]
+            : archived === "only"
+              ? "Archived Consultancies"
+              : viewAll
+                ? "All Consultancies"
+                : oversight
+                  ? `${deptName.get(session.user.departmentId ?? "") ?? "Department"} Consultancies`
+                  : "My Consultancies"
+        }
         subtitle={`${result.total.toLocaleString("en-IN")} consultanc${result.total === 1 ? "y" : "ies"}${hasFilters ? " matching your filters" : ""}`}
         action={newAction}
       />
@@ -134,7 +154,7 @@ export default async function ConsultanciesPage({ searchParams }: { searchParams
         key={q ?? ""}
         statuses={[...consultancyStatusEnum.enumValues]}
         academicYears={yearRows.map((y) => y.code)}
-        departments={oversight ? deptOptions : undefined}
+        departments={viewAll ? deptOptions : undefined}
       />
 
       <Card>

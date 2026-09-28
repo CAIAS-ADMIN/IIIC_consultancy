@@ -5,6 +5,7 @@ import { authErrorResponse } from "@/lib/auth/errors";
 import { db } from "@/db";
 import { holds, consultancies } from "@/db/schema";
 import { getConsultancyById } from "@/db/queries/consultancies";
+import { isOutOfDepartmentHod } from "@/lib/consultancy/access";
 import { putOnHoldSchema } from "@/lib/validation/lifecycle";
 import { recordAuditEvent } from "@/lib/audit";
 
@@ -21,6 +22,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const consultancy = await getConsultancyById(id);
   if (!consultancy) {
     return Response.json({ error: "Not found" }, { status: 404 });
+  }
+  if (isOutOfDepartmentHod(user, consultancy)) {
+    return Response.json({ error: "Forbidden: HOD can only act on consultancies of their own department" }, { status: 403 });
   }
   if (consultancy.status !== "active") {
     return Response.json({ error: `Cannot put a consultancy in status '${consultancy.status}' on hold` }, { status: 409 });

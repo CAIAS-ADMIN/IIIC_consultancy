@@ -4,10 +4,29 @@ import { Card, CardContent } from "@/components/ui/card";
 import { SignInButton } from "@/components/shell/sign-in-button";
 import { IIIC_LOGO_DATA_URI } from "@/components/shell/iiic-logo-data-uri";
 
-export default async function Home() {
+/**
+ * Auth.js passes `callbackUrl` back as an absolute URL. Only its path is
+ * kept, so the result is always same-origin — never an open redirect
+ * (`//evil.example/x` becomes `/x`).
+ */
+function safeCallbackPath(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value, "http://placeholder.invalid");
+    const path = `${url.pathname}${url.search}`;
+    return path === "/" ? null : path;
+  } catch {
+    return null;
+  }
+}
+
+export default async function Home({ searchParams }: { searchParams: Promise<{ callbackUrl?: string }> }) {
+  const { callbackUrl } = await searchParams;
+  const returnTo = safeCallbackPath(callbackUrl);
+
   const session = await auth();
   if (session?.user) {
-    redirect("/dashboard");
+    redirect(returnTo ?? "/dashboard");
   }
 
   return (
@@ -28,7 +47,12 @@ export default async function Home() {
               Sign in to register, track, and manage consultancy engagements.
             </p>
           </div>
-          <SignInButton />
+          {returnTo && (
+            <p role="status" className="w-full rounded-md bg-accent-soft px-3 py-2 text-sm text-accent-soft-foreground">
+              You&apos;re signed out — sessions end after 8 hours. Sign in to continue where you left off.
+            </p>
+          )}
+          <SignInButton callbackUrl={returnTo ?? "/dashboard"} />
         </CardContent>
       </Card>
     </div>

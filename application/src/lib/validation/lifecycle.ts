@@ -21,6 +21,20 @@ export const putOnHoldSchema = z.object({
   expectedResumeDate: dateString.optional(),
 });
 
+/** Section 51.3 — explicit reopening of a rejected or closed record. */
+export const reopenConsultancySchema = z.object({
+  reason: z.string().trim().min(1, "A reason is required to reopen a record"),
+  supportingDocumentId: z.string().uuid().optional(),
+});
+
+/** Section 68 — logical archiving of a finished record. */
+export const archiveConsultancySchema = z.object({
+  reason: z.string().trim().min(1, "A reason is required"),
+});
+
+/** Statuses a record must be in before it can be archived. */
+export const ARCHIVABLE_STATUSES = ["completed_closed", "cancelled", "terminated", "rejected"] as const;
+
 export const cancelConsultancySchema = z.object({
   reason: z.string().min(1),
   date: dateString,
@@ -35,4 +49,12 @@ export const terminateConsultancySchema = z.object({
   outstandingDeliverables: z.string().optional(),
   financialStatus: z.string().min(1),
   clientCommunication: z.string().optional(),
+});
+
+/** Statuses an admin can send a submitted registration back to draft from — anything before it is registered. */
+export const SEND_BACK_STATUSES = ["submitted", "under_verification", "clarification_required"] as const;
+
+/** CAIAS admin "send back for re-edit" — returns a submitted registration to draft. */
+export const sendBackConsultancySchema = z.object({
+  reason: z.string().trim().min(1, "A reason is required to send a registration back"),
 });

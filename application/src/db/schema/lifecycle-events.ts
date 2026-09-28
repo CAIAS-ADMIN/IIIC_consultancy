@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, date, timestamp, index } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, text, date, timestamp, index } from "drizzle-orm/pg-core";
 import { consultancies } from "./consultancies";
 import { users } from "./users";
 
@@ -61,4 +61,24 @@ export const terminations = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index("terminations_consultancy_idx").on(table.consultancyId)]
+);
+
+/** Section 51.3 — an explicit, audited reopening of a rejected or closed record. */
+export const reopenings = pgTable(
+  "reopenings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    consultancyId: uuid("consultancy_id")
+      .notNull()
+      .references(() => consultancies.id, { onDelete: "restrict" }),
+    previousStatus: varchar("previous_status", { length: 50 }).notNull(),
+    newStatus: varchar("new_status", { length: 50 }).notNull(),
+    reason: text("reason").notNull(),
+    supportingDocumentId: uuid("supporting_document_id"),
+    authorisedBy: uuid("authorised_by")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("reopenings_consultancy_idx").on(table.consultancyId)]
 );

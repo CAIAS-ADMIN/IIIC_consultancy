@@ -5,8 +5,10 @@ import { authErrorResponse } from "@/lib/auth/errors";
 import { db } from "@/db";
 import { extensions, consultancies } from "@/db/schema";
 import { getConsultancyById } from "@/db/queries/consultancies";
+import { isOutOfDepartmentHod } from "@/lib/consultancy/access";
 import { decideExtensionSchema } from "@/lib/validation/lifecycle";
 import { recordAuditEvent } from "@/lib/audit";
+import { notifyUser } from "@/lib/notifications";
 
 /**
  * decideExtension — on approve, `currentCompletionDate` moves to the revised
@@ -29,6 +31,9 @@ export async function POST(
   const consultancy = await getConsultancyById(id);
   if (!consultancy) {
     return Response.json({ error: "Not found" }, { status: 404 });
+  }
+  if (isOutOfDepartmentHod(user, consultancy)) {
+    return Response.json({ error: "Forbidden: HOD can only act on consultancies of their own department" }, { status: 403 });
   }
 
   const extension = await db.query.extensions.findFirst({ where: eq(extensions.id, extensionId) });
@@ -74,6 +79,18 @@ export async function POST(
         oldValue: { currentCompletionDate: consultancy.currentCompletionDate },
         newValue: { currentCompletionDate: updatedConsultancy.currentCompletionDate },
         comments: input.comments,
+      },
+      tx
+    );
+
+    await notifyUser(
+      {
+        userId: consultancy.facultyInChargeId,
+        consultancyId: id,
+        type: "extension_decided",
+        message: approved
+          ? `Extension approved for ${consultancy.consultancyCode}: new completion date ${extension.proposedCompletionDate}.`
+          : `Extension request for ${consultancy.consultancyCode} was not approved.${input.comments ? ` ${input.comments}` : ""}`,
       },
       tx
     );

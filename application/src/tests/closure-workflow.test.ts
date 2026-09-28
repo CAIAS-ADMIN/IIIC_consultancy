@@ -2,7 +2,7 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import { createTestSessionCookie } from "./helpers/session";
-import { upsertTestUser, upsertTestDepartment, upsertTestApprovalStageConfig, BASE_URL } from "./helpers/fixtures";
+import { upsertTestUser, upsertTestDepartment, upsertTestApprovalStageConfig, BASE_URL, withRegistrationDefaults, withClosureDefaults, financeVerifyClosure } from "./helpers/fixtures";
 import { closeDb, db } from "@/db";
 import { documents, closures } from "@/db/schema";
 import { getConsultancyById } from "@/db/queries/consultancies";
@@ -30,7 +30,7 @@ before(async () => {
     roles: ["faculty"],
   });
   facultyId = faculty.id;
-  facultyCookie = await createTestSessionCookie({ userId: faculty.id, roles: ["faculty"] });
+  facultyCookie = await createTestSessionCookie({ userId: faculty.id, roles: ["faculty"], departmentId });
 
   const hod = await upsertTestUser({
     keycloakSub: "test-hod-phase10",
@@ -38,7 +38,7 @@ before(async () => {
     email: "test.hod.phase10@caias.in",
     roles: ["hod"],
   });
-  hodCookie = await createTestSessionCookie({ userId: hod.id, roles: ["hod"] });
+  hodCookie = await createTestSessionCookie({ userId: hod.id, roles: ["hod"], departmentId });
 
   const iiicAdmin = await upsertTestUser({
     keycloakSub: "test-iiicadmin-phase10",
@@ -66,7 +66,7 @@ before(async () => {
 });
 
 function validSubmitPayload(overrides: Record<string, unknown> = {}) {
-  return {
+  return withRegistrationDefaults({
     consultancy: {
       departmentId,
       academicYearCode: "2025-26",
@@ -84,7 +84,7 @@ function validSubmitPayload(overrides: Record<string, unknown> = {}) {
     scope: { scopeOfWork: "Build a test integration.", deliverables: [{ description: "Final report" }] },
     resources: {},
     ...overrides,
-  };
+  });
 }
 
 async function createActiveConsultancy() {
@@ -150,13 +150,13 @@ async function requestClosure(consultancyId: string, overrides: Record<string, u
   return fetch(`${BASE_URL}/api/consultancies/${consultancyId}/closures`, {
     method: "POST",
     headers: { cookie: facultyCookie, "content-type": "application/json" },
-    body: JSON.stringify({
+    body: JSON.stringify(withClosureDefaults({
       actualCompletionDate: "2026-05-01",
       deliverableCompletionStatus: "yes",
       finalOutcomes: "All deliverables completed successfully.",
       finalReportDocumentId: finalReport.id,
       ...overrides,
-    }),
+    })),
   });
 }
 
@@ -166,12 +166,12 @@ test("closure request is rejected if the final report isn't uploaded, with a spe
   const res = await fetch(`${BASE_URL}/api/consultancies/${consultancy.id}/closures`, {
     method: "POST",
     headers: { cookie: facultyCookie, "content-type": "application/json" },
-    body: JSON.stringify({
+    body: JSON.stringify(withClosureDefaults({
       actualCompletionDate: "2026-05-01",
       deliverableCompletionStatus: "yes",
       finalOutcomes: "Done.",
       finalReportDocumentId: "00000000-0000-0000-0000-000000000000",
-    }),
+    })),
   });
   assert.equal(res.status, 400);
   const body = await res.json();
@@ -187,6 +187,8 @@ test("closure with unpaid balance succeeds only when an authorised_exception exi
 
   const statusAfterRequest = await fetch(`${BASE_URL}/api/consultancies/${consultancy.id}`, { headers: { cookie: facultyCookie } });
   assert.equal((await statusAfterRequest.json()).data.consultancy.status, "closure_requested");
+
+  await financeVerifyClosure(consultancy.id, closure.id);
 
   const blockedRes = await fetch(`${BASE_URL}/api/consultancies/${consultancy.id}/closures/${closure.id}/verify`, {
     method: "POST",
@@ -208,6 +210,8 @@ test("closure with unpaid balance succeeds only when an authorised_exception exi
     }),
   });
   assert.equal(exceptionRes.status, 201);
+
+  await financeVerifyClosure(consultancy.id, closure.id);
 
   const okRes = await fetch(`${BASE_URL}/api/consultancies/${consultancy.id}/closures/${closure.id}/verify`, {
     method: "POST",
@@ -252,6 +256,7 @@ test("clarification_required returns the consultancy to active, and it can be cl
   const secondRequestRes = await requestClosure(consultancy.id);
   assert.equal(secondRequestRes.status, 201);
   const secondClosure = (await secondRequestRes.json()).data;
+  await financeVerifyClosure(consultancy.id, secondClosure.id);
 
   const finalRes = await fetch(`${BASE_URL}/api/consultancies/${consultancy.id}/closures/${secondClosure.id}/verify`, {
     method: "POST",
@@ -296,6 +301,8 @@ test("the generated Closure Record correctly aggregates data from all three life
       reportingPeriodEnd: "2026-01-31",
       status: "on_track",
       overallProgressPercent: 100,
+      workCompleted: "Work done.",
+      workInProgress: "Work ongoing.",
     }),
   });
   await fetch(`${BASE_URL}/api/consultancies/${consultancy.id}/milestones`, {
@@ -317,6 +324,7 @@ test("the generated Closure Record correctly aggregates data from all three life
 
   const requestRes = await requestClosure(consultancy.id);
   const closure = (await requestRes.json()).data;
+  await financeVerifyClosure(consultancy.id, closure.id);
   await fetch(`${BASE_URL}/api/consultancies/${consultancy.id}/closures/${closure.id}/verify`, {
     method: "POST",
     headers: { cookie: iiicAdminCookie, "content-type": "application/json" },

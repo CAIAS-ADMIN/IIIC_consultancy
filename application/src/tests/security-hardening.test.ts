@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { asc, eq } from "drizzle-orm";
 import { createTestSessionCookie } from "./helpers/session";
-import { upsertTestUser, upsertTestDepartment, upsertTestApprovalStageConfig, BASE_URL } from "./helpers/fixtures";
+import { upsertTestUser, upsertTestDepartment, upsertTestApprovalStageConfig, BASE_URL, withRegistrationDefaults, withClosureDefaults, financeVerifyClosure } from "./helpers/fixtures";
 import { closeDb, db } from "@/db";
 import { auditEvents, documents } from "@/db/schema";
 
@@ -50,7 +50,7 @@ before(async () => {
     email: "test.hod.phase13@caias.in",
     roles: ["hod"],
   });
-  hodCookie = await createTestSessionCookie({ userId: hod.id, roles: ["hod"] });
+  hodCookie = await createTestSessionCookie({ userId: hod.id, roles: ["hod"], departmentId });
 
   const iiicAdmin = await upsertTestUser({
     keycloakSub: "test-iiicadmin-phase13",
@@ -88,7 +88,7 @@ before(async () => {
 });
 
 function validSubmitPayload(overrides: Record<string, unknown> = {}) {
-  return {
+  return withRegistrationDefaults({
     consultancy: {
       departmentId,
       academicYearCode: "2025-26",
@@ -106,7 +106,7 @@ function validSubmitPayload(overrides: Record<string, unknown> = {}) {
     scope: { scopeOfWork: "Build a test integration.", deliverables: [{ description: "Final report" }] },
     resources: {},
     ...overrides,
-  };
+  });
 }
 
 async function createDraft(title: string) {
@@ -242,6 +242,8 @@ test("the full lifecycle (draft -> submit -> verify -> activate -> progress -> p
       reportingPeriodEnd: "2026-01-31",
       status: "on_track",
       overallProgressPercent: 50,
+      workCompleted: "Work done.",
+      workInProgress: "Work ongoing.",
     }),
   });
   assert.equal(progressRes.status, 201);
@@ -273,15 +275,17 @@ test("the full lifecycle (draft -> submit -> verify -> activate -> progress -> p
   const closureRes = await fetch(`${BASE_URL}/api/consultancies/${draft.id}/closures`, {
     method: "POST",
     headers: { cookie: facultyCookie, "content-type": "application/json" },
-    body: JSON.stringify({
+    body: JSON.stringify(withClosureDefaults({
       actualCompletionDate: "2026-05-01",
       deliverableCompletionStatus: "yes",
       finalOutcomes: "All deliverables completed.",
       finalReportDocumentId: finalReportDoc.id,
-    }),
+    })),
   });
   assert.equal(closureRes.status, 201);
   const closure = (await closureRes.json()).data;
+
+  await financeVerifyClosure(draft.id, closure.id);
 
   const closureVerifyRes = await fetch(`${BASE_URL}/api/consultancies/${draft.id}/closures/${closure.id}/verify`, {
     method: "POST",
@@ -306,10 +310,13 @@ test("the full lifecycle (draft -> submit -> verify -> activate -> progress -> p
     "progress_update:progress_update_added",
     "payment_transaction:payment_transaction_recorded",
     "closure:closure_requested",
+    "closure:finance_verified",
     "closure:closure_verified",
   ]);
   // every row is attributable to a real actor — no anonymous/unattributed mutation
   assert.ok(events.every((e) => e.actorId !== null));
+  // …and records the role that actor held at the time (portal spec §63)
+  assert.ok(events.every((e) => Array.isArray(e.actorRoles) && e.actorRoles.length > 0));
 });
 
 // --- Tasks 1 & 2 (as an automated suite, not manual spot-checks): every
@@ -475,7 +482,7 @@ test("confirm rejects an upload whose actual bytes exceed the server-side size c
   assert.equal(presignRes.status, 200);
   const { uploadUrl, objectKey } = (await presignRes.json()).data;
 
-  const oversizedBytes = Buffer.alloc(26 * 1024 * 1024, 1); // actually upload 26MB, over the 25MB cap
+  const oversizedBytes = Buffer.alloc(26 * 1024 * 1024, 1); // actually upload 26MB, over the configured cap (10MB by default)
   const putRes = await fetch(uploadUrl, { method: "PUT", body: oversizedBytes, headers: { "content-type": "application/pdf" } });
   assert.equal(putRes.status, 200); // RustFS itself doesn't cap this — our confirm step must
 

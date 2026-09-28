@@ -27,6 +27,22 @@ import { users } from "./users";
  * CAIAS_Consultancy_Online_System_Field_Dropdown_Structure.docx sections
  * 2 (Registration), 3 (Area), 6 (Team), 7 (Financial), 8 (Scope), 10 (Resources).
  */
+export type ExternalExpert = {
+  name: string;
+  organisation: string;
+  expertise?: string;
+  role: string;
+  engagementTerms?: string;
+};
+
+export type ResourceItem = {
+  resource: string;
+  purpose: string;
+  estimatedUsage?: string;
+  facility?: string;
+  cost?: string;
+};
+
 export const consultancies = pgTable(
   "consultancies",
   {
@@ -49,10 +65,23 @@ export const consultancies = pgTable(
       .references(() => users.id, { onDelete: "restrict" }),
     academicYearCode: varchar("academic_year_code", { length: 20 }).notNull(),
     consultancyTypeCode: varchar("consultancy_type_code", { length: 100 }).notNull(),
+    consultancyTypeOther: varchar("consultancy_type_other", { length: 255 }),
     title: varchar("title", { length: 500 }).notNull(),
     description: text("description"),
     consultancyAreaCode: varchar("consultancy_area_code", { length: 100 }).notNull(),
     consultancyAreaOther: varchar("consultancy_area_other", { length: 255 }),
+
+    // Portal spec v2 (Screens 2, 5, 6, 9) — registration fields beyond the field/dropdown doc.
+    agreementSignedStatus: varchar("agreement_signed_status", { length: 50 }),
+    natureOfConsultancyCode: varchar("nature_of_consultancy_code", { length: 100 }),
+    natureOfConsultancyOther: varchar("nature_of_consultancy_other", { length: 255 }),
+    consultancyDomainCodes: jsonb("consultancy_domain_codes").$type<string[]>().notNull().default([]),
+    consultancyDomainOther: varchar("consultancy_domain_other", { length: 255 }),
+    consultancyCategoryCode: varchar("consultancy_category_code", { length: 100 }),
+    clientProblem: text("client_problem"),
+    objective: text("objective"),
+    reportingFrequency: varchar("reporting_frequency", { length: 50 }),
+    reportingFrequencyOther: varchar("reporting_frequency_other", { length: 255 }),
 
     startDate: date("start_date"),
     originalCompletionDate: date("original_completion_date"),
@@ -63,16 +92,32 @@ export const consultancies = pgTable(
     ndaRequired: boolean("nda_required").notNull().default(false),
     ipAgreementRequired: boolean("ip_agreement_required").notNull().default(false),
 
+    // Portal spec v2 Screen 12 — IP & confidentiality detail.
+    ipExpected: varchar("ip_expected", { length: 20 }),
+    ipTypeCodes: jsonb("ip_type_codes").$type<string[]>().notNull().default([]),
+    ipTypeOther: varchar("ip_type_other", { length: 255 }),
+    ipOwnership: text("ip_ownership"),
+    ipCommercialisationRights: text("ip_commercialisation_rights"),
+    ipRegistrationResponsibility: text("ip_registration_responsibility"),
+    ipClauseReference: varchar("ip_clause_reference", { length: 255 }),
+    confidentialInformation: boolean("confidential_information").notNull().default(false),
+    ndaAvailable: boolean("nda_available"),
+    confidentialityJustification: text("confidentiality_justification"),
+
     // Section 6 — Consultancy Team
     teamTypeCode: varchar("team_type_code", { length: 100 }).notNull(),
     externalExpertInvolved: boolean("external_expert_involved").notNull().default(false),
     externalExpertDetails: text("external_expert_details"),
     rolesAndResponsibilities: text("roles_and_responsibilities"),
+    externalExperts: jsonb("external_experts").$type<ExternalExpert[]>().notNull().default([]),
 
     // Section 7 — Financial Details (agreement-level payment terms live on `agreements`)
     totalValue: numeric("total_value", { precision: 14, scale: 2 }),
     currencyCode: varchar("currency_code", { length: 10 }).notNull().default("INR"),
+    currencyOther: varchar("currency_other", { length: 100 }),
     taxApplicable: boolean("tax_applicable").notNull().default(false),
+    taxRatePercent: numeric("tax_rate_percent", { precision: 5, scale: 2 }),
+    taxAmount: numeric("tax_amount", { precision: 14, scale: 2 }),
     taxDetails: text("tax_details"),
     estimatedInstitutionalCosts: numeric("estimated_institutional_costs", {
       precision: 14,
@@ -94,6 +139,18 @@ export const consultancies = pgTable(
     externalExpertRequired: boolean("external_expert_required").notNull().default(false),
     resourceDetails: text("resource_details"),
     estimatedResourceCost: numeric("estimated_resource_cost", { precision: 14, scale: 2 }),
+    resourceTypeCodes: jsonb("resource_type_codes").$type<string[]>().notNull().default([]),
+    resourceTypeOther: varchar("resource_type_other", { length: 255 }),
+    resourceItems: jsonb("resource_items").$type<ResourceItem[]>().notNull().default([]),
+
+    // Portal spec v2 Screen 14 — department declaration, recorded at submit.
+    declarationAcceptedAt: timestamp("declaration_accepted_at", { withTimezone: true }),
+    declarationAcceptedBy: uuid("declaration_accepted_by").references(() => users.id, { onDelete: "set null" }),
+
+    // Section 68 — logical archiving; never changes the ID or removes history.
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    archivedBy: uuid("archived_by").references(() => users.id, { onDelete: "set null" }),
+    archiveReason: text("archive_reason"),
 
     currentVersion: integer("current_version").notNull().default(1),
     isLocked: boolean("is_locked").notNull().default(false),

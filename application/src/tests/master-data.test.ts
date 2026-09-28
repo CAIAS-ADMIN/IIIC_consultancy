@@ -90,3 +90,26 @@ test("POST /api/master-data succeeds for system_admin and writes exactly one aud
   assert.equal((updateEvent!.oldValue as { label: string }).label, "Original Label");
   assert.equal((updateEvent!.newValue as { label: string }).label, "Updated Label");
 });
+
+test("DELETE /api/master-data/:id removes an unused value (system_admin only) but refuses one that's in use", async () => {
+  const code = `DEL_${Date.now()}`;
+  const created = await fetch(`${BASE_URL}/api/master-data`, {
+    method: "POST",
+    headers: { cookie: adminCookie, "content-type": "application/json" },
+    body: JSON.stringify({ category: "test_category", code, label: "Added by mistake" }),
+  });
+  const { id } = (await created.json()).data;
+
+  assert.equal((await fetch(`${BASE_URL}/api/master-data/${id}`, { method: "DELETE", headers: { cookie: facultyCookie } })).status, 403);
+  assert.equal((await fetch(`${BASE_URL}/api/master-data/${id}`, { method: "DELETE", headers: { cookie: adminCookie } })).status, 200);
+  const list = (await (await fetch(`${BASE_URL}/api/master-data?category=test_category`, { headers: { cookie: adminCookie } })).json()).data;
+  assert.ok(!list.some((row: { id: string }) => row.id === id));
+
+  // Academic year 2025-26 is used by the suite's consultancies — it can only be deactivated.
+  const years = (await (await fetch(`${BASE_URL}/api/master-data?category=academic_year`, { headers: { cookie: adminCookie } })).json()).data;
+  const inUse = years.find((row: { code: string }) => row.code === "2025-26");
+  assert.ok(inUse);
+  const refused = await fetch(`${BASE_URL}/api/master-data/${inUse.id}`, { method: "DELETE", headers: { cookie: adminCookie } });
+  assert.equal(refused.status, 409);
+  assert.match((await refused.json()).error, /in use/);
+});

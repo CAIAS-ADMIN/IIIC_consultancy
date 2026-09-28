@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { canViewConsultancy } from "@/lib/consultancy/access";
 import { requireSession } from "@/lib/auth/requireRole";
 import { authErrorResponse } from "@/lib/auth/errors";
 import { getConsultancyById } from "@/db/queries/consultancies";
@@ -20,9 +21,9 @@ import { canViewDocument } from "@/lib/documents/permissions";
  * download affordance up front instead of only discovering a 403 on click.
  */
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  let user;
+  let viewer;
   try {
-    user = await requireSession();
+    viewer = await requireSession();
   } catch (error) {
     return authErrorResponse(error);
   }
@@ -32,6 +33,9 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   if (!consultancy) {
     return Response.json({ error: "Not found" }, { status: 404 });
   }
+  if (!(await canViewConsultancy(viewer, consultancy))) {
+    return Response.json({ error: "Not found" }, { status: 404 });
+  }
 
   const category = request.nextUrl.searchParams.get("category") ?? undefined;
   const rows = await listDocumentsForConsultancy(id, category);
@@ -39,7 +43,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   const data = await Promise.all(
     rows.map(async (row) => ({
       ...row,
-      viewerCanDownload: await canViewDocument(user, consultancy, row.confidentialityLevel),
+      viewerCanDownload: await canViewDocument(viewer, consultancy, row.confidentialityLevel),
     }))
   );
 

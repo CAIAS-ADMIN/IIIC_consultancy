@@ -1,15 +1,24 @@
 "use client";
 
-import { Plus, Trash2 } from "lucide-react";
+import { Info } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { YesNoToggle } from "@/components/ui/yes-no-toggle";
-import { Field, MasterDataSelect, SectionHeading } from "../field";
-import { emptyTeamMember } from "@/lib/wizard/types";
-import type { StepProps } from "../wizard-props";
+import { formatInr } from "@/lib/format";
+import { emptyExternalExpert, emptyPaymentStage, emptyTeamMember } from "@/lib/wizard/types";
+import { Field, MasterDataSelect, RepeatingHeader, RepeatingRow, SectionHeading } from "../field";
+import { patchRow, type StepProps } from "../wizard-props";
+
+function YesNoField({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label>{label}</Label>
+      <YesNoToggle name={label} value={value} onChange={onChange} />
+    </div>
+  );
+}
 
 export function Step3TeamAgreement({
   state,
@@ -19,28 +28,18 @@ export function Step3TeamAgreement({
   updateTeam,
   updateAgreement,
   updateFinancial,
-  updateResources,
 }: StepProps) {
   const t = state.team;
   const a = state.agreement;
   const f = state.financial;
-  const r = state.resources;
 
-  const isAgreementTypeOther = a.agreementTypeCode === "other";
-  const isPaymentTermsOther = a.paymentTermsCode === "other";
-  const isPaymentModeOther = a.paymentModeCode === "other";
-
-  function updateMember(index: number, patch: Partial<(typeof t.members)[number]>) {
-    updateTeam({ members: t.members.map((m, i) => (i === index ? { ...m, ...patch } : m)) });
-  }
-
-  function addMember() {
-    updateTeam({ members: [...t.members, emptyTeamMember()] });
-  }
-
-  function removeMember(index: number) {
-    updateTeam({ members: t.members.filter((_, i) => i !== index) });
-  }
+  const members = t.members;
+  const experts = t.externalExperts;
+  const schedule = f.paymentSchedule;
+  const scheduleTotal = schedule.reduce((sum, row) => sum + (Number(row.plannedAmount) || 0), 0);
+  const totalValue = Number(f.totalValue) || 0;
+  const contributionTotal = members.reduce((sum, m) => sum + (Number(m.contributionPercent) || 0), 0);
+  const anyContribution = members.some((m) => m.contributionPercent.trim() !== "");
 
   function toggleDepartmentInvolved(id: string) {
     const set = new Set(t.departmentsInvolved);
@@ -51,165 +50,170 @@ export function Step3TeamAgreement({
 
   return (
     <div className="flex flex-col gap-8">
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          <SectionHeading>Team Members</SectionHeading>
-          <Button type="button" variant="secondary" size="sm" onClick={addMember}>
-            <Plus className="h-4 w-4" aria-hidden />
-            Add Member
-          </Button>
-        </div>
-        {errors["members"] && <p className="text-sm text-status-danger-fg">{errors["members"]}</p>}
-        <div className="flex flex-col gap-3">
-          {t.members.map((m, i) => (
-            <div key={i} className="flex flex-col gap-3 rounded-lg border border-border p-4 sm:flex-row sm:items-end">
-              <Field label="Name" htmlFor={`member-name-${i}`} className="flex-1">
-                <Input id={`member-name-${i}`} value={m.name} onChange={(e) => updateMember(i, { name: e.target.value })} />
-              </Field>
-              <Field label="Role" htmlFor={`member-role-${i}`} className="flex-1">
+      <section className="flex flex-col gap-3">
+        <RepeatingHeader
+          title="Consultancy Team"
+          addLabel="Add Consultant"
+          onAdd={() => updateTeam({ members: [...members, emptyTeamMember()] })}
+          error={errors.members}
+        />
+        <p className="text-sm text-muted-foreground">
+          Exactly one member must be the Principal Consultant. Contribution percentages are optional, but if entered they must total 100%.
+        </p>
+        {members.map((m, i) => (
+          <RepeatingRow
+            key={i}
+            title={m.role === "principal_consultant" ? "Principal Consultant" : `Team Member ${i + 1}`}
+            removeLabel={`Remove team member ${i + 1}`}
+            canRemove={members.length > 1}
+            onRemove={() => updateTeam({ members: members.filter((_, j) => j !== i) })}
+          >
+            <Field label="Name" htmlFor={`member-name-${i}`} required error={errors[`members.${i}.name`]}>
+              <Input id={`member-name-${i}`} value={m.name} onChange={(e) => updateTeam({ members: patchRow(members, i, { name: e.target.value }) })} />
+            </Field>
+            <Field label="Role in Consultancy" htmlFor={`member-role-${i}`} required error={errors[`members.${i}.role`]}>
+              <MasterDataSelect
+                id={`member-role-${i}`}
+                options={masterData.team_role ?? []}
+                value={m.role}
+                onChange={(v) => updateTeam({ members: patchRow(members, i, { role: v }) })}
+                placeholder="Select role"
+              />
+            </Field>
+            <Field label="Employee ID" htmlFor={`member-emp-${i}`} error={errors[`members.${i}.employeeId`]}>
+              <Input
+                id={`member-emp-${i}`}
+                value={m.employeeId}
+                onChange={(e) => updateTeam({ members: patchRow(members, i, { employeeId: e.target.value }) })}
+              />
+            </Field>
+            <Field label="Department" htmlFor={`member-dept-${i}`} required error={errors[`members.${i}.department`]}>
+              <Input
+                id={`member-dept-${i}`}
+                value={m.department}
+                onChange={(e) => updateTeam({ members: patchRow(members, i, { department: e.target.value }) })}
+              />
+            </Field>
+            <Field label="Designation" htmlFor={`member-desig-${i}`}>
+              <Input
+                id={`member-desig-${i}`}
+                value={m.designation}
+                onChange={(e) => updateTeam({ members: patchRow(members, i, { designation: e.target.value }) })}
+              />
+            </Field>
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Est. Hours" htmlFor={`member-hours-${i}`} error={errors[`members.${i}.estimatedHours`]}>
                 <Input
-                  id={`member-role-${i}`}
-                  value={m.role}
-                  onChange={(e) => updateMember(i, { role: e.target.value })}
-                  placeholder="e.g. Co-Investigator"
+                  id={`member-hours-${i}`}
+                  type="number"
+                  min="0"
+                  value={m.estimatedHours}
+                  onChange={(e) => updateTeam({ members: patchRow(members, i, { estimatedHours: e.target.value }) })}
                 />
               </Field>
-              <Field label="Department" htmlFor={`member-dept-${i}`} className="flex-1">
+              <Field label="Contribution %" htmlFor={`member-pct-${i}`} error={errors[`members.${i}.contributionPercent`]}>
                 <Input
-                  id={`member-dept-${i}`}
-                  value={m.department}
-                  onChange={(e) => updateMember(i, { department: e.target.value })}
+                  id={`member-pct-${i}`}
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={m.contributionPercent}
+                  onChange={(e) => updateTeam({ members: patchRow(members, i, { contributionPercent: e.target.value }) })}
                 />
               </Field>
-              <div className="flex items-center gap-2 pb-2">
-                <Checkbox
-                  id={`member-external-${i}`}
-                  checked={m.isExternal}
-                  onCheckedChange={(checked) => updateMember(i, { isExternal: checked === true })}
-                />
-                <Label htmlFor={`member-external-${i}`} className="text-sm font-normal text-muted-foreground">
-                  External
-                </Label>
-              </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label="Remove team member"
-                onClick={() => removeMember(i)}
-                disabled={t.members.length === 1}
-              >
-                <Trash2 className="h-4 w-4" aria-hidden />
-              </Button>
             </div>
-          ))}
-        </div>
+          </RepeatingRow>
+        ))}
+        {anyContribution && (
+          <p className={contributionTotal === 100 ? "text-sm text-muted-foreground" : "text-sm text-status-warning-fg"}>
+            Contribution total: {contributionTotal}%
+          </p>
+        )}
 
-        <Field label="Roles &amp; Responsibilities" htmlFor="team-roles" error={errors.rolesAndResponsibilities}>
-          <Textarea
-            id="team-roles"
-            value={t.rolesAndResponsibilities}
-            onChange={(e) => updateTeam({ rolesAndResponsibilities: e.target.value })}
-          />
+        <Field label="Roles & Responsibilities" htmlFor="team-roles" error={errors.rolesAndResponsibilities}>
+          <Textarea id="team-roles" value={t.rolesAndResponsibilities} onChange={(e) => updateTeam({ rolesAndResponsibilities: e.target.value })} />
         </Field>
 
         {departments.length > 0 && (
           <div className="flex flex-col gap-2">
-            <Label>Departments Involved</Label>
-            <div className="flex flex-wrap gap-x-6 gap-y-2">
+            <Label>Other Departments Involved</Label>
+            <div className="grid gap-x-6 gap-y-1 sm:grid-cols-2 lg:grid-cols-3">
               {departments.map((d) => (
-                <div key={d.id} className="flex items-center gap-2">
+                <label key={d.id} htmlFor={`dept-involved-${d.id}`} className="flex min-h-11 items-center gap-2 text-sm md:min-h-8">
                   <Checkbox
                     id={`dept-involved-${d.id}`}
                     checked={t.departmentsInvolved.includes(d.id)}
                     onCheckedChange={() => toggleDepartmentInvolved(d.id)}
                   />
-                  <Label htmlFor={`dept-involved-${d.id}`} className="text-sm font-normal">
-                    {d.name}
-                  </Label>
-                </div>
+                  {d.name}
+                </label>
               ))}
             </div>
           </div>
         )}
+      </section>
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="flex flex-col gap-1.5">
-            <Label>External Expert Involved?</Label>
-            <YesNoToggle
-              name="externalExpertInvolved"
-              value={t.externalExpertInvolved}
-              onChange={(v) => updateTeam({ externalExpertInvolved: v })}
-            />
-          </div>
-          {t.externalExpertInvolved && (
-            <Field label="External Expert Details" htmlFor="team-external-details" required error={errors.externalExpertDetails}>
-              <Input
-                id="team-external-details"
-                value={t.externalExpertDetails}
-                onChange={(e) => updateTeam({ externalExpertDetails: e.target.value })}
-              />
-            </Field>
-          )}
-        </div>
-      </div>
-
-      <div className="flex flex-col gap-4">
-        <SectionHeading>CAIAS Resources</SectionHeading>
-        <div className="flex flex-col gap-1.5">
-          <Label>Are CAIAS Resources Required?</Label>
-          <YesNoToggle
-            name="caiasResourcesRequired"
-            value={r.caiasResourcesRequired}
-            onChange={(v) => updateResources({ caiasResourcesRequired: v })}
-          />
-        </div>
-        {r.caiasResourcesRequired && (
+      <section className="flex flex-col gap-3">
+        <SectionHeading>External Expert</SectionHeading>
+        <YesNoField
+          label="Is an external expert involved?"
+          value={t.externalExpertInvolved}
+          onChange={(v) =>
+            updateTeam({ externalExpertInvolved: v, externalExperts: v && experts.length === 0 ? [emptyExternalExpert()] : experts })
+          }
+        />
+        {t.externalExpertInvolved && (
           <>
-            <div className="flex flex-wrap gap-x-6 gap-y-3">
-              {(
-                [
-                  ["laboratoryRequired", "Laboratory"],
-                  ["equipmentRequired", "Equipment"],
-                  ["softwareRequired", "Software"],
-                  ["travelRequired", "Travel"],
-                  ["externalExpertRequired", "External Expert"],
-                ] as const
-              ).map(([key, label]) => (
-                <div key={key} className="flex items-center gap-2">
-                  <Checkbox
-                    id={`resource-${key}`}
-                    checked={r[key]}
-                    onCheckedChange={(checked) => updateResources({ [key]: checked === true })}
+            <RepeatingHeader
+              title="External Experts"
+              addLabel="Add Expert"
+              onAdd={() => updateTeam({ externalExperts: [...experts, emptyExternalExpert()] })}
+              error={errors.externalExperts}
+            />
+            {experts.map((e, i) => (
+              <RepeatingRow
+                key={i}
+                title={`External Expert ${i + 1}`}
+                removeLabel={`Remove external expert ${i + 1}`}
+                canRemove={experts.length > 1}
+                onRemove={() => updateTeam({ externalExperts: experts.filter((_, j) => j !== i) })}
+              >
+                <Field label="Name" htmlFor={`expert-name-${i}`} required error={errors[`externalExperts.${i}.name`]}>
+                  <Input id={`expert-name-${i}`} value={e.name} onChange={(ev) => updateTeam({ externalExperts: patchRow(experts, i, { name: ev.target.value }) })} />
+                </Field>
+                <Field label="Organisation" htmlFor={`expert-org-${i}`} required error={errors[`externalExperts.${i}.organisation`]}>
+                  <Input
+                    id={`expert-org-${i}`}
+                    value={e.organisation}
+                    onChange={(ev) => updateTeam({ externalExperts: patchRow(experts, i, { organisation: ev.target.value }) })}
                   />
-                  <Label htmlFor={`resource-${key}`} className="text-sm font-normal">
-                    {label}
-                  </Label>
-                </div>
-              ))}
-            </div>
-            <Field label="Resource Details" htmlFor="resource-details" required error={errors.resourceDetails}>
-              <Textarea
-                id="resource-details"
-                value={r.resourceDetails}
-                onChange={(e) => updateResources({ resourceDetails: e.target.value })}
-              />
-            </Field>
-            <Field label="Estimated Resource Cost" htmlFor="resource-cost" error={errors.estimatedResourceCost}>
-              <Input
-                id="resource-cost"
-                type="number"
-                min="0"
-                value={r.estimatedResourceCost}
-                onChange={(e) => updateResources({ estimatedResourceCost: e.target.value })}
-              />
-            </Field>
+                </Field>
+                <Field label="Expertise" htmlFor={`expert-expertise-${i}`}>
+                  <Input
+                    id={`expert-expertise-${i}`}
+                    value={e.expertise}
+                    onChange={(ev) => updateTeam({ externalExperts: patchRow(experts, i, { expertise: ev.target.value }) })}
+                  />
+                </Field>
+                <Field label="Role" htmlFor={`expert-role-${i}`} required error={errors[`externalExperts.${i}.role`]}>
+                  <Input id={`expert-role-${i}`} value={e.role} onChange={(ev) => updateTeam({ externalExperts: patchRow(experts, i, { role: ev.target.value }) })} />
+                </Field>
+                <Field label="Engagement Terms" htmlFor={`expert-terms-${i}`} className="sm:col-span-2">
+                  <Input
+                    id={`expert-terms-${i}`}
+                    value={e.engagementTerms}
+                    onChange={(ev) => updateTeam({ externalExperts: patchRow(experts, i, { engagementTerms: ev.target.value }) })}
+                  />
+                </Field>
+              </RepeatingRow>
+            ))}
+            <p className="text-xs text-muted-foreground">Upload the expert&apos;s supporting document on the Review step.</p>
           </>
         )}
-      </div>
+      </section>
 
-      <div className="flex flex-col gap-4">
-        <SectionHeading>Agreement</SectionHeading>
+      <section className="flex flex-col gap-4">
+        <SectionHeading>Agreement Details</SectionHeading>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Agreement Type" htmlFor="agreement-type" required error={errors.agreementTypeCode}>
             <MasterDataSelect
@@ -220,31 +224,18 @@ export function Step3TeamAgreement({
               placeholder="Select agreement type"
             />
           </Field>
-          {isAgreementTypeOther && (
+          {a.agreementTypeCode === "other" && (
             <Field label="Specify Agreement Type" htmlFor="agreement-type-other" required error={errors.agreementTypeOther}>
-              <Input
-                id="agreement-type-other"
-                value={a.agreementTypeOther}
-                onChange={(e) => updateAgreement({ agreementTypeOther: e.target.value })}
-              />
+              <Input id="agreement-type-other" value={a.agreementTypeOther} onChange={(e) => updateAgreement({ agreementTypeOther: e.target.value })} />
             </Field>
           )}
-          <Field label="Agreement Number" htmlFor="agreement-number" error={errors.agreementNumber}>
-            <Input
-              id="agreement-number"
-              value={a.agreementNumber}
-              onChange={(e) => updateAgreement({ agreementNumber: e.target.value })}
-            />
+          <Field label="Agreement Number / Reference" htmlFor="agreement-number" required error={errors.agreementNumber}>
+            <Input id="agreement-number" value={a.agreementNumber} onChange={(e) => updateAgreement({ agreementNumber: e.target.value })} />
           </Field>
-          <Field label="Agreement Date" htmlFor="agreement-date" error={errors.agreementDate}>
-            <Input
-              id="agreement-date"
-              type="date"
-              value={a.agreementDate}
-              onChange={(e) => updateAgreement({ agreementDate: e.target.value })}
-            />
+          <Field label="Agreement Date" htmlFor="agreement-date" required error={errors.agreementDate}>
+            <Input id="agreement-date" type="date" value={a.agreementDate} onChange={(e) => updateAgreement({ agreementDate: e.target.value })} />
           </Field>
-          <Field label="Agreement Start Date" htmlFor="agreement-start" error={errors.agreementStartDate}>
+          <Field label="Start Date" htmlFor="agreement-start" required error={errors.agreementStartDate}>
             <Input
               id="agreement-start"
               type="date"
@@ -252,39 +243,52 @@ export function Step3TeamAgreement({
               onChange={(e) => updateAgreement({ agreementStartDate: e.target.value })}
             />
           </Field>
-          <Field label="Agreement End Date" htmlFor="agreement-end" error={errors.agreementEndDate}>
+          <Field label="End Date" htmlFor="agreement-end" required error={errors.agreementEndDate}>
+            <Input id="agreement-end" type="date" value={a.agreementEndDate} onChange={(e) => updateAgreement({ agreementEndDate: e.target.value })} />
+          </Field>
+          <Field label="Renewal / Extension Clause" htmlFor="agreement-renewal" className="sm:col-span-2">
             <Input
-              id="agreement-end"
-              type="date"
-              value={a.agreementEndDate}
-              onChange={(e) => updateAgreement({ agreementEndDate: e.target.value })}
+              id="agreement-renewal"
+              value={a.renewalClause}
+              onChange={(e) => updateAgreement({ renewalClause: e.target.value })}
+              placeholder="Optional — summarise the clause if the agreement has one"
             />
           </Field>
-          <Field label="Agreement Value (₹)" htmlFor="agreement-value" required error={errors.agreementValue}>
-            <Input
-              id="agreement-value"
-              type="number"
-              min="0"
-              value={a.agreementValue}
-              onChange={(e) => updateAgreement({ agreementValue: e.target.value })}
+        </div>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <YesNoField label="Confidentiality Clause" value={a.confidentialityClause} onChange={(v) => updateAgreement({ confidentialityClause: v })} />
+          <YesNoField label="IP Clause" value={a.ipClause} onChange={(v) => updateAgreement({ ipClause: v })} />
+          <YesNoField label="Payment Terms Included" value={a.paymentTermsIncluded} onChange={(v) => updateAgreement({ paymentTermsIncluded: v })} />
+        </div>
+      </section>
+
+      <section className="flex flex-col gap-4">
+        <SectionHeading>Financial Details</SectionHeading>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Total Consultancy Value (₹)" htmlFor="total-value" required error={errors.totalValue}>
+            <Input id="total-value" type="number" min="0" value={f.totalValue} onChange={(e) => updateFinancial({ totalValue: e.target.value })} />
+          </Field>
+          <Field label="Currency" htmlFor="currency" required error={errors.currencyCode}>
+            <MasterDataSelect
+              id="currency"
+              options={masterData.currency ?? []}
+              value={f.currencyCode}
+              onChange={(v) => updateFinancial({ currencyCode: v })}
+              placeholder="Select currency"
             />
           </Field>
-          <Field label="Payment Terms" htmlFor="payment-terms" required error={errors.paymentTermsCode}>
+          <Field label="Payment Structure" htmlFor="payment-terms" required error={errors.paymentTermsCode}>
             <MasterDataSelect
               id="payment-terms"
               options={masterData.payment_terms ?? []}
               value={a.paymentTermsCode}
               onChange={(v) => updateAgreement({ paymentTermsCode: v })}
-              placeholder="Select payment terms"
+              placeholder="Select payment structure"
             />
           </Field>
-          {isPaymentTermsOther && (
-            <Field label="Specify Payment Terms" htmlFor="payment-terms-other" required error={errors.paymentTermsOther}>
-              <Input
-                id="payment-terms-other"
-                value={a.paymentTermsOther}
-                onChange={(e) => updateAgreement({ paymentTermsOther: e.target.value })}
-              />
+          {a.paymentTermsCode === "other" && (
+            <Field label="Specify Payment Structure" htmlFor="payment-terms-other" required error={errors.paymentTermsOther}>
+              <Input id="payment-terms-other" value={a.paymentTermsOther} onChange={(e) => updateAgreement({ paymentTermsOther: e.target.value })} />
             </Field>
           )}
           <Field label="Payment Mode" htmlFor="payment-mode" error={errors.paymentModeCode}>
@@ -296,49 +300,11 @@ export function Step3TeamAgreement({
               placeholder="Select payment mode"
             />
           </Field>
-          {isPaymentModeOther && (
+          {a.paymentModeCode === "other" && (
             <Field label="Specify Payment Mode" htmlFor="payment-mode-other" required error={errors.paymentModeOther}>
-              <Input
-                id="payment-mode-other"
-                value={a.paymentModeOther}
-                onChange={(e) => updateAgreement({ paymentModeOther: e.target.value })}
-              />
+              <Input id="payment-mode-other" value={a.paymentModeOther} onChange={(e) => updateAgreement({ paymentModeOther: e.target.value })} />
             </Field>
           )}
-          <Field label="Number of Installments" htmlFor="installments" error={errors.numberOfInstallments}>
-            <Input
-              id="installments"
-              type="number"
-              min="1"
-              step="1"
-              value={a.numberOfInstallments}
-              onChange={(e) => updateAgreement({ numberOfInstallments: e.target.value })}
-            />
-          </Field>
-        </div>
-      </div>
-
-      <div className="flex flex-col gap-4">
-        <SectionHeading>Financial Details</SectionHeading>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Total Value (₹)" htmlFor="total-value" required error={errors.totalValue}>
-            <Input
-              id="total-value"
-              type="number"
-              min="0"
-              value={f.totalValue}
-              onChange={(e) => updateFinancial({ totalValue: e.target.value })}
-            />
-          </Field>
-          <Field label="Currency" htmlFor="currency" required error={errors.currencyCode}>
-            <MasterDataSelect
-              id="currency"
-              options={masterData.currency ?? []}
-              value={f.currencyCode}
-              onChange={(v) => updateFinancial({ currencyCode: v })}
-              placeholder="Select currency"
-            />
-          </Field>
           <Field label="Estimated Institutional Costs (₹)" htmlFor="inst-costs" error={errors.estimatedInstitutionalCosts}>
             <Input
               id="inst-costs"
@@ -358,20 +324,67 @@ export function Step3TeamAgreement({
             />
           </Field>
         </div>
-        <div className="flex flex-col gap-1.5">
-          <Label>Is Tax Applicable?</Label>
-          <YesNoToggle
-            name="taxApplicable"
-            value={f.taxApplicable}
-            onChange={(v) => updateFinancial({ taxApplicable: v })}
-          />
-        </div>
+        <YesNoField label="Is tax applicable?" value={f.taxApplicable} onChange={(v) => updateFinancial({ taxApplicable: v })} />
         {f.taxApplicable && (
           <Field label="Tax Details" htmlFor="tax-details" required error={errors.taxDetails}>
             <Input id="tax-details" value={f.taxDetails} onChange={(e) => updateFinancial({ taxDetails: e.target.value })} />
           </Field>
         )}
-      </div>
+
+        <RepeatingHeader
+          title="Payment Schedule"
+          addLabel="Add Stage"
+          onAdd={() => updateFinancial({ paymentSchedule: [...schedule, emptyPaymentStage()] })}
+          error={errors.paymentSchedule}
+        />
+        {schedule.map((row, i) => (
+          <RepeatingRow
+            key={i}
+            title={`Stage ${i + 1}`}
+            removeLabel={`Remove payment stage ${i + 1}`}
+            canRemove={schedule.length > 1}
+            onRemove={() => updateFinancial({ paymentSchedule: schedule.filter((_, j) => j !== i) })}
+          >
+            <Field label="Payment Stage" htmlFor={`pay-stage-${i}`} required error={errors[`paymentSchedule.${i}.stageLabel`]}>
+              <Input
+                id={`pay-stage-${i}`}
+                value={row.stageLabel}
+                onChange={(e) => updateFinancial({ paymentSchedule: patchRow(schedule, i, { stageLabel: e.target.value }) })}
+                placeholder="e.g. Advance"
+              />
+            </Field>
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Amount (₹)" htmlFor={`pay-amount-${i}`} required error={errors[`paymentSchedule.${i}.plannedAmount`]}>
+                <Input
+                  id={`pay-amount-${i}`}
+                  type="number"
+                  min="0"
+                  value={row.plannedAmount}
+                  onChange={(e) => updateFinancial({ paymentSchedule: patchRow(schedule, i, { plannedAmount: e.target.value }) })}
+                />
+              </Field>
+              <Field label="Due Date" htmlFor={`pay-due-${i}`} required error={errors[`paymentSchedule.${i}.plannedDate`]}>
+                <Input
+                  id={`pay-due-${i}`}
+                  type="date"
+                  value={row.plannedDate}
+                  onChange={(e) => updateFinancial({ paymentSchedule: patchRow(schedule, i, { plannedDate: e.target.value }) })}
+                />
+              </Field>
+            </div>
+          </RepeatingRow>
+        ))}
+        <p className={Math.abs(scheduleTotal - totalValue) < 0.01 ? "text-sm text-muted-foreground" : "text-sm text-status-warning-fg"}>
+          Scheduled {formatInr(scheduleTotal)} of {formatInr(totalValue)}
+        </p>
+        <div className="flex gap-2 rounded-md bg-background p-3 text-sm text-muted-foreground">
+          <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+          <p>
+            All consultancy payments are made to the designated CAIAS institutional account — never to an individual. Payment instructions
+            are provided by CAIAS Finance/Accounts; payment status and receipts are recorded by Finance.
+          </p>
+        </div>
+      </section>
     </div>
   );
 }

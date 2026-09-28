@@ -37,29 +37,31 @@ export function DataTable<T>({
 
   return (
     <div className={className}>
-      {/* Desktop / tablet table */}
-      <table className="hidden w-full text-sm md:table">
-        <thead>
-          <tr className="border-b border-border text-left text-muted-foreground">
-            {columns.map((col) => (
-              <th key={col.header} className={cn("px-5 py-3 font-medium", col.className)}>
-                {col.header}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {data.map((row) => (
-            <tr key={keyFor(row)} className="border-b border-border last:border-0">
+      {/* Desktop / tablet table — scrolls sideways when it has more columns than fit */}
+      <div className="hidden overflow-x-auto md:block">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border text-left text-muted-foreground">
               {columns.map((col) => (
-                <td key={col.header} className={cn("px-5 py-4 text-foreground", col.className)}>
-                  {col.cell(row)}
-                </td>
+                <th key={col.header} className={cn("px-5 py-3 font-medium", col.className)}>
+                  {col.header}
+                </th>
               ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {data.map((row) => (
+              <tr key={keyFor(row)} className="border-b border-border last:border-0">
+                {columns.map((col) => (
+                  <td key={col.header} className={cn("px-5 py-4 text-foreground", col.className)}>
+                    {col.cell(row)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
       {/* Mobile stacked card list */}
       <ul className="flex flex-col gap-3 md:hidden">

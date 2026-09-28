@@ -52,6 +52,15 @@
   --status-neutral-bg: #f1f0ec;
   --status-neutral-fg: #57534e;
 
+  /* Categorical chart series (donut slices) — reuses the palette above so
+     charts never introduce colors of their own. */
+  --chart-1: var(--primary);
+  --chart-2: var(--accent);
+  --chart-3: var(--status-info-fg);
+  --chart-4: var(--status-special-fg);
+  --chart-5: var(--status-danger-fg);
+  --chart-6: var(--status-neutral-fg);
+
   /* Shape */
   --radius-sm: 0.375rem;
   --radius-md: 0.625rem;

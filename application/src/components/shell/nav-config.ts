@@ -8,6 +8,8 @@ import {
   Building2,
   BookMarked,
   Database,
+  History,
+  ShieldCheck,
   type LucideIcon,
 } from "lucide-react";
 import type { Role } from "@/db/schema/enums";
@@ -53,9 +55,20 @@ const OVERSIGHT_CORE_NAV: NavItem[] = [
   { label: "Reports", href: "/reports", icon: BarChart3 },
 ];
 
-/** system_admin — the oversight set plus Master Data, which must be absent from every other role's nav. */
+/** hod — the oversight set, but every list is pinned to their own department. */
+const HOD_NAV: NavItem[] = OVERSIGHT_CORE_NAV.map((item) =>
+  item.href === "/consultancies" ? { ...item, label: "Department Consultancies", shortLabel: "Dept." } : item
+);
+
+const APPROVAL_SETTINGS_ITEM: NavItem = { label: "Approval Settings", shortLabel: "Approvals", href: "/approval-settings", icon: ShieldCheck };
+const AUDIT_TRAIL_ITEM: NavItem = { label: "Audit Trail", shortLabel: "Audit", href: "/audit-trail", icon: History };
+
+/** iiic_admin (CAIAS Consultancy Administrator) — oversight set plus approval configuration and the audit trail (spec §43, §50). */
+const IIIC_ADMIN_NAV: NavItem[] = [...OVERSIGHT_CORE_NAV, APPROVAL_SETTINGS_ITEM, AUDIT_TRAIL_ITEM];
+
+/** system_admin — the CAIAS admin set plus Master Data, which must be absent from every other role's nav. */
 const SYSTEM_ADMIN_NAV: NavItem[] = [
-  ...OVERSIGHT_CORE_NAV,
+  ...IIIC_ADMIN_NAV,
   { label: "Master Data", shortLabel: "Data", href: "/master-data", icon: Database },
 ];
 
@@ -73,7 +86,16 @@ const COMPETENT_AUTHORITY_NAV: NavItem[] = [
   { label: "Reports", href: "/reports", icon: BarChart3 },
 ];
 
-/** finance, audit_readonly — minimal, read-oriented set (finance also has no write-nav items here; its write UI lives on the consultancy detail page in later phases). */
+/** audit_readonly — read-only records plus the full audit trail (spec §46). */
+const AUDIT_NAV: NavItem[] = [
+  { label: "Overview", href: "/dashboard", icon: LayoutDashboard },
+  { label: "All Consultancies", shortLabel: "All", href: "/consultancies", icon: FileText },
+  AUDIT_TRAIL_ITEM,
+  { label: "Register", href: "/consultancies/register", icon: BookMarked },
+  { label: "Reports", href: "/reports", icon: BarChart3 },
+];
+
+/** finance — minimal, read-oriented set (finance also has no write-nav items here; its write UI lives on the consultancy detail page in later phases). */
 const MINIMAL_NAV: NavItem[] = [
   { label: "Overview", href: "/dashboard", icon: LayoutDashboard },
   { label: "All Consultancies", shortLabel: "All", href: "/consultancies", icon: FileText },
@@ -88,9 +110,11 @@ const MINIMAL_NAV: NavItem[] = [
  */
 const NAV_GROUPS: { roles: Role[]; items: NavItem[] }[] = [
   { roles: ["system_admin"], items: SYSTEM_ADMIN_NAV },
-  { roles: ["iiic_admin", "hod"], items: OVERSIGHT_CORE_NAV },
+  { roles: ["iiic_admin"], items: IIIC_ADMIN_NAV },
+  { roles: ["hod"], items: HOD_NAV },
   { roles: ["competent_authority"], items: COMPETENT_AUTHORITY_NAV },
-  { roles: ["finance", "audit_readonly"], items: MINIMAL_NAV },
+  { roles: ["audit_readonly"], items: AUDIT_NAV },
+  { roles: ["finance"], items: MINIMAL_NAV },
   { roles: ["faculty"], items: FACULTY_NAV },
 ];
 

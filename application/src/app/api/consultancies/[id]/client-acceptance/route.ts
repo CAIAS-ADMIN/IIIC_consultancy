@@ -5,15 +5,16 @@ import { authErrorResponse } from "@/lib/auth/errors";
 import { db } from "@/db";
 import { clientAcceptances, documents } from "@/db/schema";
 import { getConsultancyById } from "@/db/queries/consultancies";
-import { isConsultancyMember } from "@/lib/consultancy/access";
+import { isConsultancyMember, canViewConsultancy } from "@/lib/consultancy/access";
 import { recordClientAcceptanceSchema } from "@/lib/validation/closure";
 import { recordAuditEvent } from "@/lib/audit";
 
 const RECORDABLE_STATUSES = ["active", "closure_requested"] as const;
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  let viewer;
   try {
-    await requireSession();
+    viewer = await requireSession();
   } catch (error) {
     return authErrorResponse(error);
   }
@@ -23,12 +24,15 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   if (!consultancy) {
     return Response.json({ error: "Not found" }, { status: 404 });
   }
+  if (!(await canViewConsultancy(viewer, consultancy))) {
+    return Response.json({ error: "Not found" }, { status: 404 });
+  }
 
   const rows = await db.select().from(clientAcceptances).where(eq(clientAcceptances.consultancyId, id)).orderBy(desc(clientAcceptances.createdAt));
   return Response.json({ data: rows });
 }
 
-/** Records that the client formally accepted deliverables — one of the closure gate checklist items when `clientAcceptanceRequired`. */
+/** Records the client's acceptance decision (Yes / No / Not Required) — a closure gate item when `clientAcceptanceRequired`. */
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   let user;
   try {
@@ -74,7 +78,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     entityId: created.id,
     action: "client_acceptance_recorded",
     actorId: user.id,
-    newValue: { acceptedByName: created.acceptedByName, acceptanceDate: created.acceptanceDate },
+    newValue: { acceptanceStatus: created.acceptanceStatus, acceptedByName: created.acceptedByName, acceptanceDate: created.acceptanceDate },
   });
 
   return Response.json({ data: created }, { status: 201 });

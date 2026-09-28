@@ -74,6 +74,8 @@ export function SearchFilterBar({
   departments,
   faculty,
   statuses,
+  clientTypes = [],
+  categories = [],
   isDepartmentLocked,
 }: {
   filters: FilterState;
@@ -83,6 +85,8 @@ export function SearchFilterBar({
   departments: { id: string; name: string; code: string }[];
   faculty: Option[];
   statuses: string[];
+  clientTypes?: Option[];
+  categories?: Option[];
   /** Faculty-only callers are scoped to their own department by the backend — shown as a locked filter, not silently ignored. */
   isDepartmentLocked: boolean;
 }) {
@@ -201,6 +205,76 @@ export function SearchFilterBar({
         allLabel="Any"
         options={YES_NO_OPTIONS}
         onChange={(v) => onChange("resourceUsage", v)}
+      />
+
+      <SelectFilter
+        id={`${p}-clienttype`}
+        label="Client Type"
+        value={filters.clientTypeCode}
+        allLabel="All Client Types"
+        options={clientTypes}
+        onChange={(v) => onChange("clientTypeCode", v)}
+      />
+
+      <SelectFilter
+        id={`${p}-category`}
+        label="Consultancy Category"
+        value={filters.consultancyCategoryCode}
+        allLabel="All Categories"
+        options={categories}
+        onChange={(v) => onChange("consultancyCategoryCode", v)}
+      />
+
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor={`${p}-agr`} className="text-xs">
+          Agreement Reference
+        </Label>
+        <Input
+          id={`${p}-agr`}
+          placeholder="e.g. AGR-2026-014"
+          value={filters.agreementReference || ""}
+          onChange={(e) => onChange("agreementReference", e.target.value)}
+        />
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor={`${p}-startFrom`} className="text-xs">
+          Start Date From
+        </Label>
+        <Input id={`${p}-startFrom`} type="date" value={filters.startFrom || ""} onChange={(e) => onChange("startFrom", e.target.value)} />
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor={`${p}-startTo`} className="text-xs">
+          Start Date To
+        </Label>
+        <Input id={`${p}-startTo`} type="date" value={filters.startTo || ""} onChange={(e) => onChange("startTo", e.target.value)} />
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor={`${p}-completionFrom`} className="text-xs">
+          Completion From
+        </Label>
+        <Input id={`${p}-completionFrom`} type="date" value={filters.completionFrom || ""} onChange={(e) => onChange("completionFrom", e.target.value)} />
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor={`${p}-completionTo`} className="text-xs">
+          Completion To
+        </Label>
+        <Input id={`${p}-completionTo`} type="date" value={filters.completionTo || ""} onChange={(e) => onChange("completionTo", e.target.value)} />
+      </div>
+
+      <SelectFilter
+        id={`${p}-archived`}
+        label="Archived Records"
+        value={filters.archived}
+        allLabel="Exclude archived"
+        options={[
+          { value: "include", label: "Include archived" },
+          { value: "only", label: "Archived only" },
+        ]}
+        onChange={(v) => onChange("archived", v)}
       />
     </div>
   );

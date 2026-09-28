@@ -8,8 +8,13 @@ export const addProgressUpdateSchema = z
     reportingPeriodStart: dateString,
     reportingPeriodEnd: dateString,
     status: z.enum(["on_track", "delayed", "on_hold", "completed"]),
-    workCompleted: z.string().optional(),
-    workInProgress: z.string().optional(),
+    // Screen 17 — Work Completed / Work in Progress are mandatory; the rest optional.
+    workCompleted: z.string().trim().min(1, "Work Completed is required"),
+    workInProgress: z.string().trim().min(1, "Work in Progress is required"),
+    pendingActivities: z.string().optional(),
+    challenges: z.string().optional(),
+    correctiveAction: z.string().optional(),
+    nextPlannedActivity: z.string().optional(),
     overallProgressPercent: z.number().int().min(0).max(100),
     documentIds: z.array(z.string().uuid()).optional().default([]),
   })
