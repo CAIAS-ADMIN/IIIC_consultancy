@@ -1,60 +1,45 @@
+# docker-compose.prod.yml — runs ONLY the Next.js application container.
+# All other services (Postgres, Keycloak, RustFS/S3) are already running
+# on the server and are reached via the env vars below.
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml up -d --build
+#   docker compose -f docker-compose.prod.yml logs -f app
+#   docker compose -f docker-compose.prod.yml down
+
 services:
-  postgres:
-    image: postgres:16-alpine
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: iiic-consultancy-app
     restart: unless-stopped
-    environment:
-      POSTGRES_USER: caias
-      POSTGRES_PASSWORD: caias
-      POSTGRES_DB: caias_consultancy
     ports:
-      - "5433:5432"
-    volumes:
-      - caias_pgdata:/var/lib/postgresql/data
-
-  keycloak:
-    image: quay.io/keycloak/keycloak:26.0
-    restart: unless-stopped
-    command: start-dev --import-realm
+      - "3000:3000"
     environment:
-      KC_BOOTSTRAP_ADMIN_USERNAME: admin
-      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
-    ports:
-      - "8080:8080"
-    volumes:
-      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+      # ── Database (server Postgres) ──
+      DATABASE_URL: postgresql://iiicadmin:ITOps313@192.168.0.9:5433/iiicconsultancydb
 
-  rustfs:
-    image: rustfs/rustfs:latest
-    restart: unless-stopped
-    depends_on:
-      - rustfs-volume-permissions
-    # Single node, single disk — fine for local dev; not a production topology.
-    environment:
-      RUSTFS_VOLUMES: /data/rustfs0
-      RUSTFS_ADDRESS: 0.0.0.0:9000
-      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
-      RUSTFS_CONSOLE_ENABLE: "true"
-      RUSTFS_ACCESS_KEY: caiasdev
-      RUSTFS_SECRET_KEY: caiasdevsecret
-      RUSTFS_UNSAFE_BYPASS_DISK_CHECK: "true"
-      # Image defaults to /logs, a container-local dir the non-root rustfs
-      # user can't create at "/" — empty means log to stdout instead.
-      RUSTFS_OBS_LOG_DIRECTORY: ""
-    ports:
-      - "9000:9000" # S3 API — matches RUSTFS_ENDPOINT in .env
-      - "9001:9001" # Web console
-    volumes:
-      - caias_rustfs_data:/data/rustfs0
+      # ── Object Storage (server RustFS / S3) ──
+      RUSTFS_ENDPOINT: http://192.168.0.9:9000
+      RUSTFS_ACCESS_KEY: 601azYmiZ71nWgoUNsmA
+      RUSTFS_SECRET_KEY: lC6r6zHoBjumNvPKOovBrxEbwrmvvlacFQwd4bPQ
+      RUSTFS_BUCKET: caias-consultancy-documents
+      RUSTFS_REGION: us-east-1
 
-  # The rustfs image runs as uid/gid 10001:10001; a fresh named volume is
-  # root-owned, so fix permissions once before rustfs starts.
-  rustfs-volume-permissions:
-    image: alpine
-    command: sh -c "chown -R 10001:10001 /data/rustfs0"
-    volumes:
-      - caias_rustfs_data:/data/rustfs0
-    restart: "no"
+      # ── Keycloak (server) ──
+      KEYCLOAK_ISSUER: http://192.168.0.6:8080/realms/caias_faculty
+      KEYCLOAK_CLIENT_ID: caias-consultancy-portal
+      KEYCLOAK_CLIENT_SECRET: dev-secret
 
-volumes:
-  caias_pgdata:
-  caias_rustfs_data:
+      # ── NextAuth ──
+      NEXTAUTH_SECRET: dev-only-insecure-secret-change-me
+      NEXTAUTH_URL: http://192.168.0.9:3000
+
+      # ── Jobs / Cron ──
+      JOBS_SHARED_SECRET: dev-only-jobs-secret
+
+      # ── Email ──
+      EMAIL_ADDRESS: sanuth.bibin@caias.in
+      EMAIL_PASSWORD: "ikqw mdjf kjkv fgxa"
+      EMAIL_NOTIFICATIONS_ENABLED: "true"

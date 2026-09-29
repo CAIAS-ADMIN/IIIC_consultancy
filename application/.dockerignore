@@ -1,0 +1,17 @@
+node_modules
+.next
+.git
+.env*
+*.md
+*.log
+keycloak/
+db-backups/
+scripts/
+src/tests/
+.claude/
+.agents/
+import_faculty*.sql
+fix_sql.py
+*.xlsx
+*.png
+*.webp
