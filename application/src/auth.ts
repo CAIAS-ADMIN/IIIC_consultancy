@@ -26,6 +26,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       clientId: env.KEYCLOAK_CLIENT_ID,
       clientSecret: env.KEYCLOAK_CLIENT_SECRET,
       issuer: env.KEYCLOAK_ISSUER,
+      // kc_idp_hint makes Keycloak redirect straight to the Google identity
+      // provider instead of rendering its own login page.
+      ...(env.KEYCLOAK_IDP_HINT && {
+        authorization: { params: { kc_idp_hint: env.KEYCLOAK_IDP_HINT } },
+      }),
     }),
   ],
   // 8-hour session lifetime (re-authentication required after, matching a

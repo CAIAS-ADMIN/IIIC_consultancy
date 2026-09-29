@@ -16,6 +16,9 @@ export const env = {
   KEYCLOAK_ISSUER: process.env.KEYCLOAK_ISSUER ?? "",
   KEYCLOAK_CLIENT_ID: process.env.KEYCLOAK_CLIENT_ID ?? "",
   KEYCLOAK_CLIENT_SECRET: process.env.KEYCLOAK_CLIENT_SECRET ?? "",
+  // Keycloak identity-provider alias to jump straight to (skips the Keycloak
+  // login page). Set to an empty string to show the Keycloak page again.
+  KEYCLOAK_IDP_HINT: process.env.KEYCLOAK_IDP_HINT ?? "google",
   NEXTAUTH_SECRET: process.env.NEXTAUTH_SECRET ?? "",
   NEXTAUTH_URL: process.env.NEXTAUTH_URL ?? "",
   JOBS_SHARED_SECRET: process.env.JOBS_SHARED_SECRET ?? "",

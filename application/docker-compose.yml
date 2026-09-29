@@ -31,10 +31,12 @@ services:
       KEYCLOAK_ISSUER: http://192.168.0.6:8080/realms/caias_faculty
       KEYCLOAK_CLIENT_ID: caias-consultancy-portal
       KEYCLOAK_CLIENT_SECRET: dev-secret
+      # Alias of the Google identity provider in the realm — skips the Keycloak login page
+      KEYCLOAK_IDP_HINT: google
 
       # ── NextAuth ──
       NEXTAUTH_SECRET: dev-only-insecure-secret-change-me
-      NEXTAUTH_URL: http://192.168.0.9:3000
+      NEXTAUTH_URL: https://iiicconsultancy-application-269rgz-472fc8-192-168-0-13.sslip.io
 
       # ── Jobs / Cron ──
       JOBS_SHARED_SECRET: dev-only-jobs-secret
