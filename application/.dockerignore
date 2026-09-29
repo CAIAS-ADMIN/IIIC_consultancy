@@ -2,9 +2,11 @@ node_modules
 .next
 .git
 .env*
-*.md
+!.env.example
 *.log
+tsconfig.tsbuildinfo
 keycloak/
+docker/
 db-backups/
 scripts/
 src/tests/
@@ -13,5 +15,6 @@ src/tests/
 import_faculty*.sql
 fix_sql.py
 *.xlsx
-*.png
-*.webp
+Dockerfile
+docker-compose*.yml
+.dockerignore
